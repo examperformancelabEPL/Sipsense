@@ -2,9 +2,9 @@ import os
 import json
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from flask import Flask, jsonify, request, send_from_directory
-import psycopg2
-import psycopg2.extras
+import pg8000.dbapi as pg8000
 
 BASE_DIR = Path(__file__).parent
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
@@ -13,11 +13,19 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
 def get_conn():
-    # Render's internal Postgres URLs sometimes start with postgres:// -- psycopg2 wants postgresql://
-    url = DATABASE_URL
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
-    return psycopg2.connect(url)
+    parsed = urlparse(DATABASE_URL)
+    return pg8000.connect(
+        user=parsed.username,
+        password=parsed.password,
+        host=parsed.hostname,
+        port=parsed.port or 5432,
+        database=parsed.path.lstrip("/"),
+    )
+
+
+def row_to_dict(cur, row):
+    cols = [d[0] for d in cur.description]
+    return dict(zip(cols, row))
 
 
 def init_db():
@@ -62,12 +70,14 @@ def index():
 @app.route("/api/state", methods=["GET"])
 def get_state():
     with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute("SELECT customers, entries, expenses, updated_at FROM app_state WHERE id = 1")
             row = cur.fetchone()
+            if row:
+                row = row_to_dict(cur, row)
     if not row:
         return jsonify({"customers": [], "entries": [], "expenses": [], "updated_at": 0})
-    return jsonify(dict(row))
+    return jsonify(row)
 
 
 @app.route("/api/state", methods=["POST"])
