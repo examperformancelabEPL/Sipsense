@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 from pathlib import Path
@@ -11,9 +12,20 @@ app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# Where the app keeps its data. Defaults keep today's behaviour exactly
+# (table "app_state" in DATABASE_URL). To live inside a shared database, set
+# APP_STATE_TABLE (e.g. "sipsense_app_state") so it never touches other apps' tables.
+STATE_TABLE = os.environ.get("APP_STATE_TABLE", "app_state")
+if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", STATE_TABLE):
+    raise RuntimeError("APP_STATE_TABLE must be a simple lowercase name")
 
-def get_conn():
-    parsed = urlparse(DATABASE_URL)
+# One-time move: if OLD_DATABASE_URL is set and the new table is still empty,
+# the data is COPIED from the old database (which is never modified).
+OLD_DATABASE_URL = os.environ.get("OLD_DATABASE_URL", "")
+
+
+def get_conn(url=None):
+    parsed = urlparse(url or DATABASE_URL)
     return pg8000.connect(
         user=parsed.username,
         password=parsed.password,
@@ -32,8 +44,8 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS app_state (
+        f"""
+        CREATE TABLE IF NOT EXISTS {STATE_TABLE} (
             id INTEGER PRIMARY KEY,
             customers JSONB NOT NULL,
             entries JSONB NOT NULL,
@@ -42,14 +54,35 @@ def init_db():
         )
         """
     )
-    cur.execute("SELECT COUNT(*) FROM app_state WHERE id = 1")
+    cur.execute(f"SELECT COUNT(*) FROM {STATE_TABLE} WHERE id = 1")
     (count,) = cur.fetchone()
-    if count == 0:
+    if count == 0 and OLD_DATABASE_URL:
+        # Copy (never move) the live data from the old database.
+        oconn = get_conn(OLD_DATABASE_URL)
+        ocur = oconn.cursor()
+        ocur.execute("SELECT customers, entries, expenses, updated_at FROM app_state WHERE id = 1")
+        orow = ocur.fetchone()
+        ocur.close()
+        oconn.close()
+        if not orow:
+            # Refuse to start rather than quietly fall back to old seed data.
+            raise RuntimeError("OLD_DATABASE_URL is set but it has no data to copy")
+        customers, entries, expenses, updated_at = orow
+        cur.execute(
+            f"""
+            INSERT INTO {STATE_TABLE} (id, customers, entries, expenses, updated_at)
+            VALUES (1, %s, %s, %s, %s)
+            """,
+            (json.dumps(customers), json.dumps(entries), json.dumps(expenses), updated_at),
+        )
+        print(f"[sipsense] copied from old database: {len(customers)} customers, "
+              f"{len(entries)} entries, {len(expenses)} expenses", flush=True)
+    elif count == 0:
         customers = json.loads((BASE_DIR / "initial_customers.json").read_text(encoding="utf-8"))
         entries = json.loads((BASE_DIR / "initial_entries.json").read_text(encoding="utf-8"))
         cur.execute(
-            """
-            INSERT INTO app_state (id, customers, entries, expenses, updated_at)
+            f"""
+            INSERT INTO {STATE_TABLE} (id, customers, entries, expenses, updated_at)
             VALUES (1, %s, %s, %s, %s)
             """,
             (
@@ -73,7 +106,7 @@ def index():
 def get_state():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT customers, entries, expenses, updated_at FROM app_state WHERE id = 1")
+    cur.execute(f"SELECT customers, entries, expenses, updated_at FROM {STATE_TABLE} WHERE id = 1")
     row = cur.fetchone()
     if row:
         row = row_to_dict(cur, row)
@@ -94,8 +127,8 @@ def save_state():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        """
-        UPDATE app_state
+        f"""
+        UPDATE {STATE_TABLE}
         SET customers = %s, entries = %s, expenses = %s, updated_at = %s
         WHERE id = 1
         """,
@@ -118,7 +151,7 @@ def restore_seed():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE app_state SET customers = %s, entries = %s, updated_at = %s WHERE id = 1",
+        f"UPDATE {STATE_TABLE} SET customers = %s, entries = %s, updated_at = %s WHERE id = 1",
         (json.dumps(customers), json.dumps(entries), now),
     )
     conn.commit()
