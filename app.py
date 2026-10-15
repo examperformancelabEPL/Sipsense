@@ -23,6 +23,9 @@ if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", STATE_TABLE):
 # the data is COPIED from the old database (which is never modified).
 OLD_DATABASE_URL = os.environ.get("OLD_DATABASE_URL", "")
 
+# One-time recovery from a point-in-time restore copy (see restore_from_recovery).
+RECOVERY_DATABASE_URL = os.environ.get("RECOVERY_DATABASE_URL", "")
+
 
 def get_conn(url=None):
     parsed = urlparse(url or DATABASE_URL)
@@ -92,9 +95,41 @@ def init_db():
                 time.time(),
             ),
         )
+    restore_from_recovery(cur)
     conn.commit()
     cur.close()
     conn.close()
+
+
+def restore_from_recovery(cur):
+    """One-time recovery: if RECOVERY_DATABASE_URL is set and the live data is
+    completely empty, COPY the saved state from the recovery database. The
+    recovery database is only read, and live data is never replaced unless it
+    has no customers and no entries."""
+    if not RECOVERY_DATABASE_URL:
+        return
+    cur.execute(f"SELECT jsonb_array_length(customers), jsonb_array_length(entries) "
+                f"FROM {STATE_TABLE} WHERE id = 1")
+    live = cur.fetchone()
+    if live and (live[0] > 0 or live[1] > 0):
+        print("[sipsense] recovery skipped: live data is not empty", flush=True)
+        return
+    rconn = get_conn(RECOVERY_DATABASE_URL)
+    rcur = rconn.cursor()
+    rcur.execute(f"SELECT customers, entries, expenses FROM {STATE_TABLE} WHERE id = 1")
+    rrow = rcur.fetchone()
+    rcur.close()
+    rconn.close()
+    if not rrow or (not rrow[0] and not rrow[1]):
+        raise RuntimeError("recovery database has no SipSense data to copy")
+    customers, entries, expenses = rrow
+    cur.execute(
+        f"UPDATE {STATE_TABLE} SET customers = %s, entries = %s, expenses = %s, "
+        f"updated_at = %s WHERE id = 1",
+        (json.dumps(customers), json.dumps(entries), json.dumps(expenses), time.time()),
+    )
+    print(f"[sipsense] RECOVERED from recovery database: {len(customers)} customers, "
+          f"{len(entries)} entries, {len(expenses)} expenses", flush=True)
 
 
 @app.route("/")
