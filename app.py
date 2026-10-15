@@ -119,13 +119,54 @@ def get_state():
 
 @app.route("/api/state", methods=["POST"])
 def save_state():
-    data = request.get_json(force=True, silent=True) or {}
-    customers = data.get("customers", [])
-    entries = data.get("entries", [])
-    expenses = data.get("expenses", [])
+    data = request.get_json(force=True, silent=True)
+    # Never overwrite saved data with a broken or partial upload (e.g. a
+    # phone losing signal mid-save). Previously an unreadable body became {}
+    # and every list was saved as empty, wiping the ledger.
+    if not isinstance(data, dict) or not all(
+        isinstance(data.get(k), list) for k in ("customers", "entries", "expenses")
+    ):
+        return jsonify({"ok": False, "error": "incomplete save rejected"}), 400
+    customers = data["customers"]
+    entries = data["entries"]
+    expenses = data["expenses"]
     now = time.time()
     conn = get_conn()
     cur = conn.cursor()
+    cur.execute(
+        f"SELECT jsonb_array_length(customers), jsonb_array_length(entries) "
+        f"FROM {STATE_TABLE} WHERE id = 1"
+    )
+    current = cur.fetchone()
+    if current and current[0] > 0 and not customers and not entries:
+        # Refuse a save that would erase every customer and entry at once.
+        cur.close()
+        conn.close()
+        return jsonify({"ok": False, "error": "save would erase all data; rejected"}), 409
+    # Keep the previous version so any bad save can be undone.
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {STATE_TABLE}_history (
+            saved_at DOUBLE PRECISION NOT NULL,
+            customers JSONB NOT NULL,
+            entries JSONB NOT NULL,
+            expenses JSONB NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        f"INSERT INTO {STATE_TABLE}_history (saved_at, customers, entries, expenses) "
+        f"SELECT updated_at, customers, entries, expenses FROM {STATE_TABLE} WHERE id = 1"
+    )
+    # Keep only the latest 30 versions (~0.75 MB each) so the shared database
+    # doesn't fill up.
+    cur.execute(
+        f"""
+        DELETE FROM {STATE_TABLE}_history WHERE saved_at NOT IN (
+            SELECT saved_at FROM {STATE_TABLE}_history ORDER BY saved_at DESC LIMIT 30
+        )
+        """
+    )
     cur.execute(
         f"""
         UPDATE {STATE_TABLE}
