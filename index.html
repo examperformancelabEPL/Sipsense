@@ -117,6 +117,7 @@ td { padding:10px 12px; border-bottom:1px solid #edf1f7; }
 
   <div class="tabs">
     <button class="tab" data-tab="entry">New Entry</button>
+    <button class="tab" data-tab="kamran">Payment to Kamran</button>
     <button class="tab" data-tab="ledger">Customer Ledger</button>
     <button class="tab" data-tab="day">Close the Day</button>
     <button class="tab" data-tab="bill">Generate Bill</button>
@@ -207,6 +208,40 @@ Example: 318|2|0|2|
           <div class="stat"><div class="k" id="statTodayLabel">2026-08-22 Entries</div><div class="v" id="statToday">1</div></div>
           <div class="stat"><div class="k" id="statTodayBottlesLabel">2026-08-22 Bottles</div><div class="v" id="statTodayBottles">2</div></div>
         </div>
+      </div>
+    </div>
+
+    <div id="kamran" class="section">
+      <div class="card">
+        <h2>Payment to Kamran</h2>
+        <div class="small" style="margin-bottom:10px;">Record money sent to Kamran for a customer. It is saved as that customer's payment (ledger, outstanding and bills).</div>
+        <div class="grid-2">
+          <div class="field"><label>Date</label><input type="date" id="kamDate"></div>
+          <div class="field"><label>Amount (Rs)</label><input id="kamAmount" inputmode="numeric" placeholder="e.g. 2800"></div>
+        </div>
+        <div class="field">
+          <label>Payment for Customer</label>
+          <div class="searchwrap">
+            <input id="kamCustomer" placeholder="Type villa #, name or phone">
+            <div id="kamSuggest" class="suggest" style="display:none;"></div>
+          </div>
+          <div id="kamCustDetails" class="small" style="margin-top:8px;"></div>
+        </div>
+        <div class="field"><label>Notes (optional)</label><input id="kamNotes" placeholder="e.g. paid by bank transfer"></div>
+        <div class="btnrow">
+          <button class="btn primary" id="kamSaveBtn">Save Payment</button>
+          <button class="btn ghost" id="kamClearBtn">Clear</button>
+        </div>
+        <div class="small" id="kamStatus" style="margin-top:8px;"></div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>Payments sent to Kamran</h2>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
+          <div class="field" style="margin:0;"><label>From Date</label><input type="date" id="kamFrom"></div>
+          <div class="field" style="margin:0;"><label>To Date</label><input type="date" id="kamTo"></div>
+          <button class="btn secondary" id="kamShowBtn" style="margin-bottom:0;">Show</button>
+        </div>
+        <div id="kamList"></div>
       </div>
     </div>
 
@@ -1687,6 +1722,7 @@ window.addEventListener("load", async () => {
   bindReceivedAutofill();
   bindSuggests();
   bindActions();
+  try { bindKamran(); } catch (err) { console.error("Kamran payments setup failed", err); }
   document.getElementById("dayDate").value = todayISO();
   document.getElementById("entryDate").value = todayISO();
   var _lt=localStorage.getItem("ss_last_time");
@@ -2214,6 +2250,89 @@ function loadImageDataUrl(src) {
   return fetch(src).then(function(r){ if (!r.ok) throw new Error(); return r.blob(); })
     .then(function(bl){ return new Promise(function(res){ var fr = new FileReader(); fr.onload = function(){ res(fr.result); }; fr.readAsDataURL(bl); }); })
     .catch(function(){ return null; });
+}
+// ===== PAYMENT TO KAMRAN =====
+// Saved as a normal entry (given 0, cash = amount) so it counts as the customer's payment
+// everywhere, and tagged sent_to: "Kamran" so the transfers can be listed and totalled.
+function pickKamCustomer(c) {
+  var el = document.getElementById("kamCustomer");
+  el.value = c.display; el.dataset.key = c.searchable || c.display;
+  document.getElementById("kamSuggest").style.display = "none";
+  var pa = parseAddress(c.address);
+  document.getElementById("kamCustDetails").innerHTML =
+    "<b>" + esc(c.customer_name) + "</b> · " + esc(c.address || "") + " · " + esc(c.contact || "No phone") + " · " + esc(c.payment_type || "");
+}
+function clearKamForm() {
+  ["kamCustomer", "kamAmount", "kamNotes"].forEach(function(id){ document.getElementById(id).value = ""; });
+  document.getElementById("kamCustomer").dataset.key = "";
+  document.getElementById("kamCustDetails").innerHTML = "";
+}
+function saveKamPayment() {
+  var st = document.getElementById("kamStatus");
+  var date = document.getElementById("kamDate").value || todayISO();
+  var amount = Number(String(document.getElementById("kamAmount").value).replace(/[^0-9.]/g, ""));
+  var key = (document.getElementById("kamCustomer").dataset.key || "").toLowerCase();
+  var c = customers.find(function(x){ return (x.searchable || x.display || "").toLowerCase() === key; });
+  if (!c) { st.textContent = "Please pick the customer from the list."; return; }
+  if (!amount || amount <= 0) { st.textContent = "Please enter the amount."; return; }
+  var note = "Payment sent to Kamran" + (document.getElementById("kamNotes").value.trim() ? " - " + document.getElementById("kamNotes").value.trim() : "");
+  entries.push({
+    id: "kam_" + Date.now(), date: date, time: nowTime(),
+    searchable: c.searchable, customer: c.display, customer_name: c.customer_name,
+    address: c.address || "", area: c.area || "", contact: c.contact || "",
+    given: 0, received: 0, cash: amount,
+    payment_type: c.payment_type || "", price_per_bottle: Number(c.price_per_bottle || 140),
+    notes: note, sent_to: "Kamran"
+  });
+  saveState();
+  st.textContent = "Saved: Rs " + amount.toLocaleString() + " for " + c.customer_name + " on " + fmtDay(date) + ".";
+  showToast("Payment saved to " + c.customer_name + "'s account");
+  clearKamForm();
+  renderKamList(); renderStats(); renderLedger();
+}
+function renderKamList() {
+  var from = document.getElementById("kamFrom").value || "", to = document.getElementById("kamTo").value || "";
+  var rows = entries.filter(function(e){ return e.sent_to === "Kamran" && (!from || e.date >= from) && (!to || e.date <= to); })
+                    .sort(function(a, b){ return b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id)); });
+  var total = rows.reduce(function(a, e){ return a + Number(e.cash || 0); }, 0);
+  var box = document.getElementById("kamList");
+  if (!rows.length) { box.innerHTML = "<div style='padding:14px;color:#667085;'>No payments recorded for this period.</div>"; return; }
+  var h = "<div style='padding:12px 16px;background:#fdecdc;border-radius:12px;margin-bottom:12px;font-weight:800;color:#2d3192;'>Total sent to Kamran: Rs " + total.toLocaleString() + " &nbsp;|&nbsp; " + rows.length + " payment(s)</div>";
+  h += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;min-width:480px;'><thead><tr style='background:#2d3192;color:#fff;'>" +
+       "<th style='padding:9px;text-align:left;'>Date</th><th style='padding:9px;text-align:left;'>Customer</th><th style='padding:9px;text-align:left;'>Address</th>" +
+       "<th style='padding:9px;text-align:right;'>Amount</th><th style='padding:9px;text-align:left;'>Notes</th><th style='padding:9px;'></th></tr></thead><tbody>";
+  rows.forEach(function(e, i){
+    h += "<tr style='background:" + (i % 2 ? "#f8faff" : "#fff") + ";border-bottom:1px solid #edf1f7;'>" +
+         "<td style='padding:9px;white-space:nowrap;'>" + esc(fmtDay(e.date)) + "</td>" +
+         "<td style='padding:9px;font-weight:700;'>" + esc(e.customer_name || "") + "</td>" +
+         "<td style='padding:9px;color:#667085;'>" + esc(e.address || "") + "</td>" +
+         "<td style='padding:9px;text-align:right;font-weight:700;color:#19b36b;'>Rs " + Number(e.cash || 0).toLocaleString() + "</td>" +
+         "<td style='padding:9px;font-size:12px;color:#888;'>" + esc(String(e.notes || "").replace(/^Payment sent to Kamran( - )?/, "")) + "</td>" +
+         "<td style='padding:9px;text-align:center;'><button class='actionbtn delete' data-eid='" + esc(e.id) + "' onclick='deleteKamPayment(this.dataset.eid)'>Delete</button></td></tr>";
+  });
+  box.innerHTML = h + "</tbody></table></div>";
+}
+function deleteKamPayment(id) {
+  var e = entries.find(function(x){ return x.id === id; });
+  if (!e) return;
+  if (!confirm("Delete Rs " + Number(e.cash).toLocaleString() + " payment for " + e.customer_name + " on " + fmtDay(e.date) + "? It will also be removed from the customer's account.")) return;
+  entries = entries.filter(function(x){ return x.id !== id; });
+  saveState(); renderKamList(); renderStats(); renderLedger();
+}
+function bindKamran() {
+  var today = todayISO();
+  document.getElementById("kamDate").value = today;
+  document.getElementById("kamFrom").value = today.slice(0, 8) + "01";
+  document.getElementById("kamTo").value = today;
+  var inp = document.getElementById("kamCustomer");
+  inp.addEventListener("focus", function(){ renderSuggest("kamCustomer", "kamSuggest", pickKamCustomer); });
+  inp.addEventListener("input", function(){ inp.dataset.key = ""; document.getElementById("kamCustDetails").innerHTML = ""; renderSuggest("kamCustomer", "kamSuggest", pickKamCustomer); });
+  hideSuggestOnOutside("#kamran .searchwrap", "#kamSuggest");
+  document.getElementById("kamSaveBtn").addEventListener("click", saveKamPayment);
+  document.getElementById("kamClearBtn").addEventListener("click", function(){ clearKamForm(); document.getElementById("kamStatus").textContent = ""; });
+  document.getElementById("kamShowBtn").addEventListener("click", renderKamList);
+  document.querySelector('.tab[data-tab="kamran"]').addEventListener("click", renderKamList);
+  renderKamList();
 }
 function computeMonthlyBill(key, from, to) {
   var kl = String(key || "").toLowerCase().trim();
