@@ -2414,7 +2414,7 @@ async function downloadDateSummaryPDF() {
     var jsPDF = window.jspdf.jsPDF;
     var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     var pageW = doc.internal.pageSize.getWidth();
-    var BLUE = [15, 75, 216], GREY = [102, 112, 133];
+    var BLUE = [45, 49, 146], ORANGE = [243, 130, 34], GREY = [102, 112, 133];
     var TBL_W = 204, TBL_L = 12;
     var custByKey = {}; customers.forEach(function(c){ custByKey[(c.searchable || "").toLowerCase()] = c; });
 
@@ -2427,10 +2427,17 @@ async function downloadDateSummaryPDF() {
       ? ((from ? prettyDate(from) + " " + from.slice(0, 4) : "Start") + " to " + (to ? prettyDate(to) + " " + to.slice(0, 4) : "Today"))
       : "All dates (" + dates[dates.length - 1] + " to " + dates[0] + ")";
 
-    doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor(15, 23, 42);
-    doc.text("SipSense - Date Summary", 12, 15);
+    // Brand header: logo left, title right, navy + orange rule
+    var logo = await loadImageDataUrl("/vendor/sipsense-logo.jpg");
+    if (logo) doc.addImage(logo, "JPEG", 12, 5, 33, 19);
+    else { doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.setTextColor.apply(doc, BLUE); doc.text("SipSense", 12, 17); }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor.apply(doc, BLUE);
+    doc.text("DATE SUMMARY", pageW - 12, 13, { align: "right" });
     doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor.apply(doc, GREY);
-    doc.text(pdfText(rangeTxt + "   |   Downloaded " + new Date().toLocaleString()), 12, 21);
+    doc.text(pdfText(rangeTxt), pageW - 12, 19, { align: "right" });
+    doc.text("Downloaded " + new Date().toLocaleString(), pageW - 12, 23.5, { align: "right" });
+    doc.setFillColor.apply(doc, BLUE); doc.rect(0, 27, pageW, 1.4, "F");
+    doc.setFillColor.apply(doc, ORANGE); doc.rect(0, 28.4, pageW, 0.8, "F");
 
     // Summary boxes
     var boxes = [
@@ -2441,16 +2448,16 @@ async function downloadDateSummaryPDF() {
     var bw = 44;
     boxes.forEach(function(b, i){
       var x = 12 + i * (bw + 4);
-      doc.setFillColor.apply(doc, b[2]); doc.roundedRect(x, 25, bw, 15, 2, 2, "F");
+      doc.setFillColor.apply(doc, b[2]); doc.roundedRect(x, 33, bw, 14, 2, 2, "F");
       doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, GREY);
-      doc.text(b[0], x + bw / 2, 30.5, { align: "center" });
+      doc.text(b[0], x + bw / 2, 38, { align: "center" });
       doc.setFontSize(13); doc.setTextColor.apply(doc, b[3]);
-      doc.text(b[1], x + bw / 2, 37, { align: "center" });
+      doc.text(b[1], x + bw / 2, 44.2, { align: "center" });
     });
 
     // Daily totals table
     doc.autoTable({
-      startY: 45,
+      startY: 51,
       head: [["Date", "Bottles Delivered", "Bottles Received", "Cash Received"]],
       body: dates.map(function(d){
         var r = map[d], dt = new Date(d + "T00:00:00");
@@ -2461,17 +2468,19 @@ async function downloadDateSummaryPDF() {
       theme: "grid",
       styles: { fontSize: 8.5, cellPadding: 1.6, halign: "center", lineColor: [226, 232, 240] },
       headStyles: { fillColor: BLUE, textColor: 255, fontStyle: "bold" },
-      footStyles: { fillColor: [255, 248, 225], textColor: [15, 23, 42], fontStyle: "bold" },
+      footStyles: { fillColor: [253, 236, 220], textColor: BLUE, fontStyle: "bold" },
       columnStyles: { 0: { halign: "left", cellWidth: 40 }, 1: { cellWidth: 32 }, 2: { cellWidth: 32 }, 3: { halign: "right", cellWidth: 34 } },
       tableWidth: 138,
       margin: { left: 12, right: 12 }
     });
 
-    // Day-wise detail
-    doc.addPage();
-    doc.setFont("helvetica", "bold"); doc.setFontSize(13); doc.setTextColor(15, 23, 42);
-    doc.text("Day-wise entry detail", 12, 14);
-    var y = 18;
+    // Day-wise detail continues on the same page; spills to new pages only when needed
+    var y = doc.lastAutoTable.finalY + 9;
+    if (y > doc.internal.pageSize.getHeight() - 40) { doc.addPage(); y = 14; }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor.apply(doc, BLUE);
+    doc.text("Day-wise entry detail", 12, y);
+    doc.setFillColor.apply(doc, ORANGE); doc.rect(12, y + 1.5, 46, 0.6, "F");
+    y += 5;
     dates.forEach(function(d){
       var list = map[d].slice().sort(function(a, b){ return dsTimeKey(a.time) - dsTimeKey(b.time); });
       var dt = new Date(d + "T00:00:00");
