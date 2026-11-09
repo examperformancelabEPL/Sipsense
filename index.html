@@ -1780,7 +1780,32 @@ function buildWAMessage(customer, key, from, to) {
 
 // Also keep buildDeliveryMessage for Close the Day compatibility
 function buildDeliveryMessage(customer, d) {
-  return buildWAMessage(customer, customer, "", "") || ("No entries for "+customer);
+  d = d || todayISO();
+  var first = entries.find(function(e){ return e.customer === customer && e.date === d; }) ||
+              entries.find(function(e){ return e.customer === customer; }) || {};
+  var key = (first.searchable || "").toLowerCase();
+  var cust = customers.find(function(c){ return (c.searchable || "").toLowerCase() === key; }) || {};
+  var monthStart = d.slice(0, 8) + "01";
+  var rows = entries.filter(function(e){
+    var mine = key ? (e.searchable || "").toLowerCase() === key : e.customer === customer;
+    return mine && e.date >= monthStart && e.date <= d && Number(e.given || 0) > 0;
+  });
+  var byDay = {};
+  rows.forEach(function(e){ byDay[e.date] = (byDay[e.date] || 0) + Number(e.given || 0); });
+  var days = Object.keys(byDay).sort();
+  var total = days.reduce(function(a, k){ return a + byDay[k]; }, 0);
+  var monthName = new Date(d + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  var NL = "\n";
+  var m = "*SipSense - Purified Drinking Water* 💧" + NL;
+  m += "*" + (cust.address || first.address || customer) + "*" + NL + NL;
+  m += "*Deliveries for " + monthName + "*" + NL;
+  days.forEach(function(k){
+    var line = new Date(k + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) + "  -  " + byDay[k] + (byDay[k] === 1 ? " bottle" : " bottles");
+    m += (k === d ? "*" + line + "*" : line) + NL;
+  });
+  if (!days.length) m += "No deliveries yet this month" + NL;
+  m += NL + "*Total deliveries this month: " + total + (total === 1 ? " bottle" : " bottles") + "*";
+  return m;
 }
 
 // ===== SEND WA TAB =====
@@ -1937,7 +1962,7 @@ function buildBulkWaList(d) {
   names.forEach(function(name,i){
     var first=rows.find(function(x){return x.customer===name;})||{};
     var phone=first.contact||"";
-    var msg=buildWAMessage(name,name,"","");
+    var msg=buildDeliveryMessage(name,d);
     var url=msg?waUrl(phone,msg):"";
     waQueue.push({name:name,phone:phone,url:url,sent:false});
     h+="<div style='display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #edf1f7;flex-wrap:wrap;'>"+
@@ -2185,6 +2210,11 @@ function fmtDay(iso) {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 function rs(n) { return "Rs " + Math.round(Number(n || 0)).toLocaleString(); }
+function loadImageDataUrl(src) {
+  return fetch(src).then(function(r){ if (!r.ok) throw new Error(); return r.blob(); })
+    .then(function(bl){ return new Promise(function(res){ var fr = new FileReader(); fr.onload = function(){ res(fr.result); }; fr.readAsDataURL(bl); }); })
+    .catch(function(){ return null; });
+}
 function computeMonthlyBill(key, from, to) {
   var kl = String(key || "").toLowerCase().trim();
   var cust = customers.find(function(c){ return (c.searchable || "").toLowerCase() === kl; }) || null;
@@ -2264,14 +2294,20 @@ async function downloadMonthlyBillPDF() {
     await loadScriptOnce("/vendor/jspdf.plugin.autotable.min.js");
     var doc = new window.jspdf.jsPDF({ unit: "mm", format: "a4" });
     var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
-    var BLUE = [15, 75, 216], GREY = [102, 112, 133], DARK = [15, 23, 42];
-    doc.setFillColor.apply(doc, BLUE); doc.rect(0, 0, W, 26, "F");
-    doc.setTextColor(255); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("SipSense Water", 14, 12);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text("Monthly Bill", 14, 19);
-    doc.setFontSize(9); doc.text("Bill date: " + fmtDay(todayISO()), W - 14, 12, { align: "right" });
-    doc.text("Period: " + fmtDay(b.from) + " to " + fmtDay(b.to), W - 14, 19, { align: "right" });
+    var BLUE = [45, 49, 146], ORANGE = [243, 130, 34], GREY = [102, 112, 133], DARK = [15, 23, 42];
+    // Brand header: logo left, bill title right, navy + orange rule underneath
+    var logo = await loadImageDataUrl("/vendor/sipsense-logo.jpg");
+    if (logo) doc.addImage(logo, "JPEG", 14, 8, 40, 23);
+    else { doc.setTextColor.apply(doc, BLUE); doc.setFont("helvetica", "bold"); doc.setFontSize(20); doc.text("SipSense", 14, 22); }
+    doc.setTextColor.apply(doc, BLUE); doc.setFont("helvetica", "bold"); doc.setFontSize(20);
+    doc.text("MONTHLY BILL", W - 14, 17, { align: "right" });
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor.apply(doc, GREY);
+    doc.text("Bill date: " + fmtDay(todayISO()), W - 14, 23, { align: "right" });
+    doc.text("Period: " + fmtDay(b.from) + " to " + fmtDay(b.to), W - 14, 28, { align: "right" });
+    doc.setFillColor.apply(doc, BLUE); doc.rect(0, 34, W, 1.6, "F");
+    doc.setFillColor.apply(doc, ORANGE); doc.rect(0, 35.6, W, 0.9, "F");
     doc.autoTable({
-      startY: 32, theme: "plain", tableWidth: 120,
+      startY: 41, theme: "plain", tableWidth: 120,
       body: [["Customer", pdfText(r.name)], ["Area", pa.area || c.area || "-"], ["Villa #", pa.villa || "-"]]
             .concat(pa.num ? [[pa.type === "Rd" ? "Road #" : "Street #", pa.num]] : [])
             .concat([["Contact #", pdfText(c.contact || "-")], ["Payment Type", pdfText(c.payment_type || "-")]]),
@@ -2306,16 +2342,18 @@ async function downloadMonthlyBillPDF() {
       startY: y + 2, tableWidth: 140, theme: "plain", body: sumRows,
       foot: [[b.total < 0 ? "ADVANCE BALANCE" : "TOTAL PAYABLE", b.total < 0 ? rs(-b.total) : rs(b.total)]],
       styles: { fontSize: 9.5, cellPadding: 1.6, textColor: DARK }, columnStyles: { 1: { halign: "right", cellWidth: 35, fontStyle: "bold" } },
-      footStyles: { fillColor: b.total > 0 ? [254, 226, 226] : [220, 252, 231], textColor: b.total > 0 ? [185, 28, 28] : [21, 128, 61], fontStyle: "bold", fontSize: 12 },
+      footStyles: { fillColor: b.total > 0 ? [253, 236, 220] : [220, 252, 231], textColor: b.total > 0 ? BLUE : [21, 128, 61], fontStyle: "bold", fontSize: 12, lineWidth: { top: 0.6 }, lineColor: ORANGE },
       didParseCell: function(d){
         if (d.section === "body" && /adjusted against/.test(String(d.row.raw[0]))) { d.cell.styles.fontSize = 8; d.cell.styles.textColor = GREY; }
         if (d.section === "foot" && d.column.index === 1) d.cell.styles.halign = "right";
       },
       margin: { left: 14 }
     });
+    doc.setFillColor.apply(doc, ORANGE); doc.rect(14, H - 22, W - 28, 0.6, "F");
     doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, GREY);
-    doc.text("Payments received during the month are first adjusted against the previous balance.", 14, H - 14);
-    doc.text("Thank you for choosing SipSense Water.", 14, H - 9);
+    doc.text("Payments received during the month are first adjusted against the previous balance.", 14, H - 16);
+    doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, BLUE);
+    doc.text("Thank you for choosing SipSense - Purified Drinking Water", 14, H - 10);
     var safe = pdfText(r.name).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "");
     doc.save("SipSense_Bill_" + safe + "_" + b.from + "_to_" + b.to + ".pdf");
   } catch (err) { console.error(err); alert("Could not create the PDF: " + err.message); }
