@@ -2258,13 +2258,11 @@ async function downloadDateSummaryPDF() {
 
     // Summary boxes
     var boxes = [
-      ["Total Bottles", String(tG), [232, 244, 255], BLUE],
-      ["Total Cash", "Rs " + tC.toLocaleString(), [232, 250, 240], [25, 179, 107]],
-      ["Bottles Returned", String(tR), [240, 244, 255], GREY],
-      ["Days", String(dates.length), [255, 248, 225], [245, 158, 11]],
-      ["Entries", String(rows.length), [244, 244, 245], [15, 23, 42]]
+      ["Bottles Delivered", String(tG), [232, 244, 255], BLUE],
+      ["Cash Received", "Rs " + tC.toLocaleString(), [232, 250, 240], [25, 179, 107]],
+      ["Bottles Received", String(tR), [240, 244, 255], GREY]
     ];
-    var bw = (pageW - 24 - 4 * 4) / 5;
+    var bw = (pageW - 24 - 4 * 2) / 3;
     boxes.forEach(function(b, i){
       var x = 12 + i * (bw + 4);
       doc.setFillColor.apply(doc, b[2]); doc.roundedRect(x, 25, bw, 15, 2, 2, "F");
@@ -2277,18 +2275,18 @@ async function downloadDateSummaryPDF() {
     // Daily totals table
     doc.autoTable({
       startY: 45,
-      head: [["Date", "Day", "Customers", "Bottles Delivered", "Cash Received", "Bottles Returned"]],
+      head: [["Date", "Bottles Delivered", "Cash Received", "Bottles Received"]],
       body: dates.map(function(d){
         var r = map[d], dt = new Date(d + "T00:00:00");
-        return [d, dt.toLocaleDateString("en-GB", { weekday: "short" }), r.length, sum(r, "given"),
+        return [dt.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }), sum(r, "given"),
                 sum(r, "cash") ? "Rs " + sum(r, "cash").toLocaleString() : "-", sum(r, "received")];
       }),
-      foot: [["Total", dates.length + " days", rows.length, tG, "Rs " + tC.toLocaleString(), tR]],
+      foot: [["Total", tG, "Rs " + tC.toLocaleString(), tR]],
       theme: "grid",
       styles: { fontSize: 8.5, cellPadding: 1.6, halign: "center", lineColor: [226, 232, 240] },
       headStyles: { fillColor: BLUE, textColor: 255, fontStyle: "bold" },
       footStyles: { fillColor: [255, 248, 225], textColor: [15, 23, 42], fontStyle: "bold" },
-      columnStyles: { 0: { halign: "left" }, 4: { halign: "right" } },
+      columnStyles: { 0: { halign: "left" }, 2: { halign: "right" } },
       margin: { left: 12, right: 12 }
     });
 
@@ -2301,18 +2299,18 @@ async function downloadDateSummaryPDF() {
       var list = map[d].slice().sort(function(a, b){ return dsTimeKey(a.time) - dsTimeKey(b.time); });
       var dt = new Date(d + "T00:00:00");
       var title = dt.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
-      var info = "Bottles: " + sum(list, "given") + "    Cash: Rs " + sum(list, "cash").toLocaleString() +
-                 "    Returned: " + sum(list, "received") + "    Customers: " + list.length;
+      var info = "Delivered: " + sum(list, "given") + "    Cash: Rs " + sum(list, "cash").toLocaleString() +
+                 "    Received: " + sum(list, "received");
       if (y > doc.internal.pageSize.getHeight() - 40) { doc.addPage(); y = 14; }
       doc.autoTable({
         startY: y,
         head: [[{ content: pdfText(title), colSpan: 2, styles: { halign: "left", fontSize: 10 } },
-                { content: pdfText(info), colSpan: 5, styles: { halign: "right", fontStyle: "normal" } }],
-               ["Time", "Customer", "Delivered", "Cash", "Returned", "Type", "Notes"]],
+                { content: pdfText(info), colSpan: 3, styles: { halign: "right", fontStyle: "normal" } }],
+               ["Customer", "Address", "Delivered", "Cash", "Received"]],
         body: list.map(function(e){
-          return [pdfText(e.time), pdfText(e.customer || e.customer_name), Number(e.given || 0),
+          return [pdfText(e.customer_name || e.customer), pdfText(e.address), Number(e.given || 0),
                   Number(e.cash || 0) ? "Rs " + Number(e.cash).toLocaleString() : "-",
-                  Number(e.received || 0), pdfText(e.payment_type), pdfText(e.notes)];
+                  Number(e.received || 0)];
         }),
         theme: "grid",
         rowPageBreak: "avoid",
@@ -2327,9 +2325,8 @@ async function downloadDateSummaryPDF() {
           }
         },
         columnStyles: {
-          0: { cellWidth: 18, textColor: GREY }, 1: { cellWidth: 75 }, 2: { cellWidth: 18, halign: "center" },
-          3: { cellWidth: 24, halign: "right" }, 4: { cellWidth: 18, halign: "center" },
-          5: { cellWidth: 32, textColor: GREY }, 6: { cellWidth: "auto", fontSize: 7, textColor: [85, 85, 85] }
+          0: { cellWidth: 70, fontStyle: "bold" }, 1: { cellWidth: "auto", textColor: [70, 70, 70] },
+          2: { cellWidth: 30, halign: "center" }, 3: { cellWidth: 35, halign: "right" }, 4: { cellWidth: 30, halign: "center" }
         },
         showHead: "everyPage",
         margin: { left: 12, right: 12 }
