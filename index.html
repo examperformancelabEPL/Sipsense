@@ -2241,6 +2241,8 @@ async function downloadDateSummaryPDF() {
     var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     var pageW = doc.internal.pageSize.getWidth();
     var BLUE = [15, 75, 216], GREY = [102, 112, 133];
+    var TBL_W = 204, TBL_L = 12;
+    var custByKey = {}; customers.forEach(function(c){ custByKey[(c.searchable || "").toLowerCase()] = c; });
 
     var map = {};
     rows.forEach(function(e){ var d = e.date || "Unknown"; (map[d] = map[d] || []).push(e); });
@@ -2259,10 +2261,10 @@ async function downloadDateSummaryPDF() {
     // Summary boxes
     var boxes = [
       ["Bottles Delivered", String(tG), [232, 244, 255], BLUE],
-      ["Cash Received", "Rs " + tC.toLocaleString(), [232, 250, 240], [25, 179, 107]],
-      ["Bottles Received", String(tR), [240, 244, 255], GREY]
+      ["Bottles Received", String(tR), [240, 244, 255], GREY],
+      ["Cash Received", "Rs " + tC.toLocaleString(), [232, 250, 240], [25, 179, 107]]
     ];
-    var bw = (pageW - 24 - 4 * 2) / 3;
+    var bw = 44;
     boxes.forEach(function(b, i){
       var x = 12 + i * (bw + 4);
       doc.setFillColor.apply(doc, b[2]); doc.roundedRect(x, 25, bw, 15, 2, 2, "F");
@@ -2275,18 +2277,19 @@ async function downloadDateSummaryPDF() {
     // Daily totals table
     doc.autoTable({
       startY: 45,
-      head: [["Date", "Bottles Delivered", "Cash Received", "Bottles Received"]],
+      head: [["Date", "Bottles Delivered", "Bottles Received", "Cash Received"]],
       body: dates.map(function(d){
         var r = map[d], dt = new Date(d + "T00:00:00");
         return [dt.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" }), sum(r, "given"),
-                sum(r, "cash") ? "Rs " + sum(r, "cash").toLocaleString() : "-", sum(r, "received")];
+                sum(r, "received"), sum(r, "cash") ? "Rs " + sum(r, "cash").toLocaleString() : "-"];
       }),
-      foot: [["Total", tG, "Rs " + tC.toLocaleString(), tR]],
+      foot: [["Total", tG, tR, "Rs " + tC.toLocaleString()]],
       theme: "grid",
       styles: { fontSize: 8.5, cellPadding: 1.6, halign: "center", lineColor: [226, 232, 240] },
       headStyles: { fillColor: BLUE, textColor: 255, fontStyle: "bold" },
       footStyles: { fillColor: [255, 248, 225], textColor: [15, 23, 42], fontStyle: "bold" },
-      columnStyles: { 0: { halign: "left" }, 2: { halign: "right" } },
+      columnStyles: { 0: { halign: "left", cellWidth: 40 }, 1: { cellWidth: 32 }, 2: { cellWidth: 32 }, 3: { halign: "right", cellWidth: 34 } },
+      tableWidth: 138,
       margin: { left: 12, right: 12 }
     });
 
@@ -2299,18 +2302,22 @@ async function downloadDateSummaryPDF() {
       var list = map[d].slice().sort(function(a, b){ return dsTimeKey(a.time) - dsTimeKey(b.time); });
       var dt = new Date(d + "T00:00:00");
       var title = dt.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
-      var info = "Delivered: " + sum(list, "given") + "    Cash: Rs " + sum(list, "cash").toLocaleString() +
-                 "    Received: " + sum(list, "received");
+      var info = "Delivered: " + sum(list, "given") + "    Received: " + sum(list, "received") +
+                 "    Cash: Rs " + sum(list, "cash").toLocaleString();
       if (y > doc.internal.pageSize.getHeight() - 40) { doc.addPage(); y = 14; }
       doc.autoTable({
         startY: y,
-        head: [[{ content: pdfText(title), colSpan: 2, styles: { halign: "left", fontSize: 10 } },
-                { content: pdfText(info), colSpan: 3, styles: { halign: "right", fontStyle: "normal" } }],
-               ["Customer", "Address", "Delivered", "Cash", "Received"]],
+        head: [[{ content: pdfText(title), colSpan: 3, styles: { halign: "left", fontSize: 10 } },
+                { content: pdfText(info), colSpan: 6, styles: { halign: "right", fontStyle: "normal" } }],
+               ["Area", "Customer Name", "Villa #", "Street #", "Road #", "Contact #", "Bottles Delivered", "Bottles Received", "Cash Received"]],
         body: list.map(function(e){
-          return [pdfText(e.customer_name || e.customer), pdfText(e.address), Number(e.given || 0),
-                  Number(e.cash || 0) ? "Rs " + Number(e.cash).toLocaleString() : "-",
-                  Number(e.received || 0)];
+          var pa = parseAddress(e.address);
+          var cust = custByKey[(e.searchable || "").toLowerCase()];
+          return [pa.area || (cust && cust.area) || "", pdfText(e.customer_name || e.customer), pa.villa || "",
+                  pa.type === "St." ? pa.num : "", pa.type === "Rd" ? pa.num : "",
+                  pdfText((cust && cust.contact) || e.contact || ""),
+                  Number(e.given || 0), Number(e.received || 0),
+                  Number(e.cash || 0) ? "Rs " + Number(e.cash).toLocaleString() : "-"];
         }),
         theme: "grid",
         rowPageBreak: "avoid",
@@ -2320,16 +2327,18 @@ async function downloadDateSummaryPDF() {
           if (data.section === "head" && data.row.index === 1) {
             data.cell.styles.fillColor = [240, 244, 255]; data.cell.styles.textColor = GREY;
           }
-          if (data.section === "body" && data.column.index === 2) {
+          if (data.section === "body" && data.column.index === 6) {
             data.cell.styles.textColor = BLUE; data.cell.styles.fontStyle = "bold";
           }
         },
         columnStyles: {
-          0: { cellWidth: 70, fontStyle: "bold" }, 1: { cellWidth: "auto", textColor: [70, 70, 70] },
-          2: { cellWidth: 30, halign: "center" }, 3: { cellWidth: 35, halign: "right" }, 4: { cellWidth: 30, halign: "center" }
+          0: { cellWidth: 20 }, 1: { cellWidth: 48, fontStyle: "bold" }, 2: { cellWidth: 15, halign: "center" },
+          3: { cellWidth: 16, halign: "center" }, 4: { cellWidth: 15, halign: "center" }, 5: { cellWidth: 27, halign: "center" },
+          6: { cellWidth: 20, halign: "center" }, 7: { cellWidth: 20, halign: "center" }, 8: { cellWidth: 23, halign: "right" }
         },
+        tableWidth: TBL_W,
         showHead: "everyPage",
-        margin: { left: 12, right: 12 }
+        margin: { left: TBL_L, right: TBL_L }
       });
       y = doc.lastAutoTable.finalY + 6;
     });
