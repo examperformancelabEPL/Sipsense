@@ -572,7 +572,7 @@ Example: 318|2|0|2|
       </div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>Searchable Name</label><input id="popupSearchable" placeholder="Optional - villa # is added automatically"></div>
+      <div class="field"><label>Searchable Name (automatic)</label><input id="popupSearchable" readonly style="background:#eef2f7;" placeholder="Filled automatically: Name - Villa #"></div>
       <div class="field"><label>Customer Name</label><input id="popupCustomerName"></div>
     </div>
     <div class="grid-2">
@@ -770,18 +770,39 @@ function bindTabs() {
 function customerMatch(c, q) {
   return [c.searchable,c.customer_name,c.address,c.contact,c.payment_type,c.display,c.keywords].join(" ").toLowerCase().includes(q);
 }
+function villaSearchKey(q) {
+  var m = String(q || "").trim().match(/^(?:villa\s*)?([0-9]+[a-z]?)$/i);
+  return m ? m[1].toUpperCase() : "";
+}
+function areaSortKey(c) {
+  var p = parseAddress(c.address);
+  var stNum = parseInt(p.num, 10) || 0;
+  return (p.area === "P31" ? "0" : (p.type === "Rd" ? "2" : "1")) + String(stNum).padStart(4, "0") + (p.num || "");
+}
 function renderSuggest(inputId, boxId, onPick) {
   const input = document.getElementById(inputId);
   const box = document.getElementById(boxId);
   const q = (input.value || "").toLowerCase().trim();
-  const list = customers.filter(c => customerMatch(c, q)).slice(0, 30);
+  const vq = villaSearchKey(q);
+  let list;
+  if (vq) {
+    // A plain number = villa #: show every customer at that villa (P31 and Sports City) to choose from.
+    list = customers.filter(c => {
+      const v = parseAddress(c.address).villa;
+      return v === vq || (v.indexOf("/") > -1 && v.split("/").indexOf(vq) > -1);
+    }).sort((a, b) => areaSortKey(a).localeCompare(areaSortKey(b)));
+    if (!list.length) list = customers.filter(c => customerMatch(c, q)).slice(0, 30);
+  } else {
+    list = customers.filter(c => customerMatch(c, q)).slice(0, 30);
+  }
   if (!list.length) {
     box.innerHTML = '<div class="sitem">No customer found</div>';
     box.style.display = "block";
     return;
   }
-  box.innerHTML = list.map((c, i) => '<div class="sitem" data-i="' + i + '"><div>' + esc(c.display) + '</div><div class="ssub">' + esc(c.searchable) + ' · ' + esc(c.contact) + ' · ' + esc(c.payment_type) + '</div></div>').join("");
-  Array.from(box.querySelectorAll(".sitem")).forEach(el => {
+  const head = vq && list.length ? '<div class="sitem" style="cursor:default;background:#f0f4ff;font-size:12px;color:#667085;">' + list.length + ' customer(s) at Villa ' + esc(vq) + ' - tap the right one</div>' : "";
+  box.innerHTML = head + list.map((c, i) => '<div class="sitem" data-i="' + i + '"><div><b>' + esc(c.customer_name) + '</b> – ' + esc(c.address) + (c.status && c.status !== "Active" ? ' <span style="color:#ef4444;font-size:11px;">(' + esc(c.status) + ')</span>' : '') + '</div><div class="ssub">' + esc(c.searchable) + ' · ' + esc(c.contact) + ' · ' + esc(c.payment_type) + '</div></div>').join("");
+  Array.from(box.querySelectorAll(".sitem[data-i]")).forEach(el => {
     el.onclick = () => onPick(list[Number(el.dataset.i)]);
   });
   box.style.display = "block";
@@ -870,7 +891,8 @@ function autoResolveEntry() {
   const input = document.getElementById("entryCustomer");
   const q = (input.value || "").toLowerCase().trim();
   if (!q) return;
-  const matches = customers.filter(c => customerMatch(c, q));
+  const vq = villaSearchKey(q);
+  const matches = vq ? customers.filter(c => parseAddress(c.address).villa === vq) : customers.filter(c => customerMatch(c, q));
   if (matches.length === 1) pickEntryCustomer(matches[0]);
 }
 function getSelectedEntryDate() {
@@ -1167,6 +1189,22 @@ function normalizeAddress(addr) {
   if (!p.villa || !p.area) return addr;  // can't safely reformat (e.g. MISC) - leave as it is
   return formatAddress(p.area, p.villa, p.type, p.num);
 }
+function shortCustomerName(name) {
+  return String(name || "").replace(/^\s*(mr|mrs|ms|dr|maj|miss)\.?\s+/i, "").replace(/\s*-\s*$/, "").replace(/\s+/g, " ").trim();
+}
+// Standard searchable name: "Name - Villa #". Customers with no real name get "Villa # - P31" / "Villa # - St. X".
+function standardSearchable(c) {
+  var p = parseAddress(c.address);
+  if (!p.villa) return c.searchable || shortCustomerName(c.customer_name);
+  var nm = shortCustomerName(c.customer_name);
+  if (!nm || /^vil+a\s*\d/i.test(nm)) {
+    return "Villa " + p.villa + (p.area === "P31" ? " - P31" : (p.num ? " - " + p.type + " " + p.num : " - Sports City"));
+  }
+  return nm + " - Villa " + p.villa;
+}
+function buildKeywords(c) {
+  return [c.searchable, c.customer_name, c.address, c.contact, c.payment_type, c.area, c.nickname].filter(Boolean).join(" | ");
+}
 function updatePopupAddress() {
   var area = document.getElementById("popupArea").value;
   document.getElementById("popupStreetWrap").style.display = area === "Sports City" ? "block" : "none";
@@ -1174,6 +1212,9 @@ function updatePopupAddress() {
     document.getElementById("popupVilla").value,
     document.getElementById("popupStreetType").value,
     area === "Sports City" ? document.getElementById("popupStreetNo").value : "");
+  document.getElementById("popupSearchable").value = standardSearchable({
+    customer_name: document.getElementById("popupCustomerName").value,
+    address: document.getElementById("popupAddress").value, searchable: "" }) || "";
 }
 function relinkEntries(oldC, newC) {
   var n = 0;
@@ -1196,8 +1237,21 @@ function repairDataOnLoad() {
     if (na !== c.address || ns !== c.searchable || (ar && c.area !== ar)) {
       c.address = na; c.searchable = ns; if (ar) c.area = ar;
       c.display = (c.customer_name + " – " + c.address).replace(/^\s*–\s*|\s*–\s*$/g, "");
-      c.keywords = [c.searchable, c.customer_name, c.address, c.contact, c.payment_type, c.area].filter(Boolean).join(" | ");
+      c.keywords = buildKeywords(c);
       changed++;
+    }
+  });
+  // Make every searchable name "Name - Villa #" (old nickname kept for searching) and move entries along with it.
+  var used = {};
+  customers.forEach(function(c){
+    var std = standardSearchable(c), k = std.toLowerCase();
+    if (used[k]) { var p = parseAddress(c.address); std += p.num ? " - " + p.type + " " + p.num : " - " + (p.area || "2"); k = std.toLowerCase(); }
+    used[k] = true;
+    if (std && std !== c.searchable) {
+      var old = { searchable: c.searchable, display: c.display };
+      if (!c.nickname && c.searchable && c.searchable.toLowerCase() !== std.toLowerCase()) c.nickname = c.searchable;
+      c.searchable = std; c.keywords = buildKeywords(c);
+      changed += 1 + relinkEntries(old, c);
     }
   });
   var keys = {}; customers.forEach(function(c){ keys[(c.searchable || "").toLowerCase()] = true; });
@@ -1307,11 +1361,10 @@ function savePopupCustomer() {
   updatePopupAddress();
   var nameIn = document.getElementById("popupCustomerName").value.trim();
   if (!nameIn) { alert("Please enter the Customer Name."); return; }
-  var srch = document.getElementById("popupSearchable").value.trim();
-  if (!srch) srch = nameIn.replace(/^(mr|mrs|ms|dr|maj)\.?\s+/i, "");
-  srch = normalizeStreetText(srch);
-  if (/villa\s*[0-9]+[a-z]?(?:\/[0-9]+)?/i.test(srch)) srch = srch.replace(/villa\s*[0-9]+[a-z]?(?:\/[0-9]+)?/i, "Villa " + villa);
-  else srch += " - Villa " + villa;
+  var srch = standardSearchable({ customer_name: nameIn, address: document.getElementById("popupAddress").value, searchable: "" });
+  var clash = customers.find(function(x){ return (x.searchable || "").toLowerCase() === srch.toLowerCase() &&
+                                                 (popupMode === "add" || (x.searchable || x.display) !== editingKey); });
+  if (clash) { alert("A customer '" + srch + "' already exists (" + clash.address + "). Please check the name / villa."); return; }
   document.getElementById("popupSearchable").value = srch;
   const c = {
     searchable: document.getElementById("popupSearchable").value.trim(),
@@ -1326,7 +1379,11 @@ function savePopupCustomer() {
   };
   applyLeftCustomerDefaults(c);
   c.display = (c.customer_name + " – " + c.address).replace(/^\s*–\s*|\s*–\s*$/g, "");
-  c.keywords = [c.searchable,c.customer_name,c.address,c.contact,c.payment_type].join(" | ");
+  if (popupMode !== "add") {
+    var prev = customers.find(function(x){ return (x.searchable || x.display) === editingKey; });
+    if (prev && prev.nickname) c.nickname = prev.nickname;
+  }
+  c.keywords = buildKeywords(c);
   if (popupMode === "add") {
     customers.push(c);
   } else {
@@ -1514,7 +1571,7 @@ function bindActions() {
   document.getElementById("addCustomerBtn").addEventListener("click", () => openPopup("add"));
   document.getElementById("editCustomerBtn").addEventListener("click", () => openPopup("edit"));
   document.getElementById("popupSaveBtn").addEventListener("click", savePopupCustomer);
-  ["popupArea","popupVilla","popupStreetType","popupStreetNo"].forEach(function(id){
+  ["popupArea","popupVilla","popupStreetType","popupStreetNo","popupCustomerName"].forEach(function(id){
     var el = document.getElementById(id);
     el.addEventListener("input", updatePopupAddress); el.addEventListener("change", updatePopupAddress);
   });
