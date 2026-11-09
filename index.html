@@ -456,7 +456,7 @@ Example: 318|2|0|2|
           <div class="field" style="margin:0;"><label>From Date</label><input type="date" id="dsFrom"></div>
           <div class="field" style="margin:0;"><label>To Date</label><input type="date" id="dsTo"></div>
           <button class="btn secondary" id="dsRefreshBtn" style="margin-bottom:0;">Show Detail</button>
-          <button class="btn ghost" id="dsAllBtn" style="margin-bottom:0;">Show All</button>
+          <button class="btn ghost" id="dsAllBtn" style="margin-bottom:0;">Today's Delivery</button>
           <button class="btn primary" id="dsPdfBtn" style="margin-bottom:0;">⬇ Download PDF</button>
         </div>
         <div id="dsSummaryBox"></div></div>
@@ -1732,7 +1732,11 @@ function bindActions() {
   document.getElementById("backupCsvBtn").addEventListener("click", downloadCSV);
   document.getElementById("saveAppBtn").addEventListener("click", saveAppAsHTML);
   document.getElementById("dsRefreshBtn").addEventListener("click", function(){ renderDateSummary(false); });
-  document.getElementById("dsAllBtn").addEventListener("click", function(){ renderDateSummary(true); });
+  document.getElementById("dsAllBtn").addEventListener("click", function(){
+    var t = todayISO();
+    document.getElementById("dsFrom").value = t; document.getElementById("dsTo").value = t;
+    renderDateSummary(false);
+  });
   document.getElementById("dsPdfBtn").addEventListener("click", downloadDateSummaryPDF);
   document.getElementById("pnlRefreshBtn").addEventListener("click", function(){ renderPnL(false); });
   document.getElementById("pnlAllBtn").addEventListener("click", function(){ renderPnL(true); });
