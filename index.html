@@ -362,6 +362,7 @@ Example: 318|2|0|2|
           <button class="btn secondary" id="mbGenerateBtn">Generate Bill</button>
           <button class="btn ghost" id="mbCopyBtn">Copy Bill</button>
           <button class="btn primary" id="mbSendBtn" style="background:#25d366;">Send WhatsApp</button>
+          <button class="btn primary" id="mbPdfBtn">⬇ Download PDF</button>
           <button class="btn ghost" id="mbClearBtn">Clear</button>
         </div>
         <div class="small" id="mbStatus" style="margin-top:8px;">Bill generated. 13 entries.</div>
@@ -1611,6 +1612,7 @@ function bindActions() {
     navigator.clipboard.writeText(document.getElementById("waPreviewText").innerText).then(function(){alert("Copied!");});
   });
   document.getElementById("mbGenerateBtn").addEventListener("click", generateMonthlyBill);
+  document.getElementById("mbPdfBtn").addEventListener("click", downloadMonthlyBillPDF);
   document.getElementById("mbCopyBtn").addEventListener("click", function(){
     var txt=document.getElementById("mbPreview").innerText;
     if(!txt||txt==="No bill generated yet.")return alert("Generate bill first");
@@ -2171,19 +2173,153 @@ function renderDeliverySchedule() {
   list.innerHTML = h;
 }
 
+// ===== MONTHLY BILL (statement style) =====
+// Payments received in the bill period are first adjusted against the balance
+// carried from before the period (e.g. last month's bill); only any extra goes
+// towards this period's bottles.
+function dayBefore(iso) {
+  var d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() - 1);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function fmtDay(iso) {
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+function rs(n) { return "Rs " + Math.round(Number(n || 0)).toLocaleString(); }
+function computeMonthlyBill(key, from, to) {
+  var kl = String(key || "").toLowerCase().trim();
+  var cust = customers.find(function(c){ return (c.searchable || "").toLowerCase() === kl; }) || null;
+  var all = entries.filter(function(e){ return (e.searchable || "").toLowerCase() === kl; });
+  if (!all.length) all = getEntriesByKey(key);
+  all = all.slice().sort(function(a, b){ return (a.date + String(dsTimeKey(a.time)).padStart(5, "0")).localeCompare(b.date + String(dsTimeKey(b.time)).padStart(5, "0")); });
+  var defPrice = Number((cust && cust.price_per_bottle) || 140);
+  var amt = function(e){ return Number(e.given || 0) * Number(e.price_per_bottle || defPrice); };
+  var prev = all.filter(function(e){ return e.date < from; });
+  var cur  = all.filter(function(e){ return e.date >= from && e.date <= to; });
+  var b = {
+    customer: cust, rows: cur, price: defPrice, from: from, to: to,
+    prevCharges: prev.reduce(function(a, e){ return a + amt(e); }, 0),
+    prevPaid: prev.reduce(function(a, e){ return a + Number(e.cash || 0); }, 0),
+    curBottles: cur.reduce(function(a, e){ return a + Number(e.given || 0); }, 0),
+    curReturned: cur.reduce(function(a, e){ return a + Number(e.received || 0); }, 0),
+    curCharges: cur.reduce(function(a, e){ return a + amt(e); }, 0),
+    payments: cur.filter(function(e){ return Number(e.cash || 0) > 0; })
+  };
+  b.curPaid = b.payments.reduce(function(a, e){ return a + Number(e.cash); }, 0);
+  b.prevBal = b.prevCharges - b.prevPaid;                    // >0 = owed from before, <0 = advance
+  b.prevDue = Math.max(b.prevBal, 0);
+  b.paidToPrev = Math.min(b.curPaid, b.prevDue);
+  b.prevRemaining = b.prevDue - b.paidToPrev;
+  b.credit = (b.curPaid - b.paidToPrev) + Math.max(-b.prevBal, 0); // extra payment / advance used for this month
+  b.total = b.prevBal + b.curCharges - b.curPaid;            // what the customer owes now
+  return b;
+}
+function buildMonthlyBillMessage(name, b) {
+  var NL = "\n", c = b.customer || {};
+  var m = "*SipSense Water - Monthly Bill*" + NL;
+  m += "*Customer:* " + name + NL;
+  if (c.address) m += "*Address:* " + c.address + NL;
+  m += "*Bill Period:* " + fmtDay(b.from) + " to " + fmtDay(b.to) + NL + NL;
+  if (b.rows.some(function(e){ return Number(e.given || 0) > 0; })) {
+    m += "*Deliveries*" + NL;
+    b.rows.forEach(function(e){ if (Number(e.given || 0) > 0) m += prettyDate(e.date) + "  -  " + String(Number(e.given)).padStart(2, "0") + " Bottles" + NL; });
+    m += NL;
+  }
+  m += "*This month: " + b.curBottles + " Bottles x Rs " + b.price + " = " + rs(b.curCharges) + "*" + NL + NL;
+  m += "Previous balance (till " + fmtDay(dayBefore(b.from)) + "): " + (b.prevBal < 0 ? "Advance " + rs(-b.prevBal) : rs(b.prevBal)) + NL;
+  if (b.curPaid > 0) {
+    m += "Payment received: " + rs(b.curPaid) + " (" + b.payments.map(function(e){ return prettyDate(e.date); }).join(", ") + ")" + NL;
+    if (b.paidToPrev > 0) m += "  - " + rs(b.paidToPrev) + " adjusted against previous balance" + NL;
+    if (b.curPaid - b.paidToPrev > 0) m += "  - " + rs(b.curPaid - b.paidToPrev) + " adjusted against this month" + NL;
+    m += "Previous balance remaining: " + rs(b.prevRemaining) + NL;
+  }
+  m += NL + (b.total > 0 ? "*Total Payable: " + rs(b.total) + "*" : (b.total < 0 ? "*Advance Balance: " + rs(-b.total) + "*" : "*Total Payable: Rs 0 - Fully Paid*"));
+  return m;
+}
+function readMonthlyBillInputs() {
+  var customer = document.getElementById("mbCustomer").value.trim();
+  var from = document.getElementById("mbFrom").value;
+  var to = document.getElementById("mbTo").value;
+  if (!customer) { document.getElementById("mbStatus").textContent = "Select customer first."; return null; }
+  if (!from || !to) { document.getElementById("mbStatus").textContent = "Select date range."; return null; }
+  var key = document.getElementById("mbCustomer").dataset.key || customer;
+  var b = computeMonthlyBill(key, from, to);
+  var name = (b.customer && b.customer.customer_name) || customer.split(" – ")[0];
+  return { b: b, name: name };
+}
 function generateMonthlyBill() {
-  var customer=document.getElementById("mbCustomer").value.trim();
-  var from=document.getElementById("mbFrom").value;
-  var to=document.getElementById("mbTo").value;
-  if(!customer)return document.getElementById("mbStatus").textContent="Select customer first.";
-  if(!from||!to)return document.getElementById("mbStatus").textContent="Select date range.";
-  var key=document.getElementById("mbCustomer").dataset.key||customer;
-  var msg=buildWAMessage(customer,key,from,to);
-  if(!msg)return document.getElementById("mbStatus").textContent="No entries found for this period.";
-  document.getElementById("mbPreview").innerText=msg;
-  var rows=getEntriesByKey(key).filter(function(e){return e.date>=from&&e.date<=to;});
-  document.getElementById("mbPreview").dataset.phone=rows.length?rows[0].contact||"":"";
-  document.getElementById("mbStatus").textContent="Bill generated. "+rows.length+" entries.";
+  var r = readMonthlyBillInputs(); if (!r) return;
+  if (!r.b.rows.length && r.b.prevBal === 0) return document.getElementById("mbStatus").textContent = "No entries found for this period.";
+  document.getElementById("mbPreview").innerText = buildMonthlyBillMessage(r.name, r.b);
+  document.getElementById("mbPreview").dataset.phone = (r.b.customer && r.b.customer.contact) || (r.b.rows[0] && r.b.rows[0].contact) || "";
+  document.getElementById("mbStatus").textContent = "Bill generated. " + r.b.rows.length + " entries.";
+}
+async function downloadMonthlyBillPDF() {
+  var r = readMonthlyBillInputs(); if (!r) return;
+  var b = r.b, c = b.customer || {}, pa = parseAddress(c.address || (b.rows[0] && b.rows[0].address) || "");
+  if (!b.rows.length && b.prevBal === 0) { document.getElementById("mbStatus").textContent = "No entries found for this period."; return; }
+  var btn = document.getElementById("mbPdfBtn"), old = btn.textContent;
+  btn.disabled = true; btn.textContent = "Preparing PDF...";
+  try {
+    await loadScriptOnce("/vendor/jspdf.umd.min.js");
+    await loadScriptOnce("/vendor/jspdf.plugin.autotable.min.js");
+    var doc = new window.jspdf.jsPDF({ unit: "mm", format: "a4" });
+    var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+    var BLUE = [15, 75, 216], GREY = [102, 112, 133], DARK = [15, 23, 42];
+    doc.setFillColor.apply(doc, BLUE); doc.rect(0, 0, W, 26, "F");
+    doc.setTextColor(255); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("SipSense Water", 14, 12);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text("Monthly Bill", 14, 19);
+    doc.setFontSize(9); doc.text("Bill date: " + fmtDay(todayISO()), W - 14, 12, { align: "right" });
+    doc.text("Period: " + fmtDay(b.from) + " to " + fmtDay(b.to), W - 14, 19, { align: "right" });
+    doc.autoTable({
+      startY: 32, theme: "plain", tableWidth: 120,
+      body: [["Customer", pdfText(r.name)], ["Area", pa.area || c.area || "-"], ["Villa #", pa.villa || "-"]]
+            .concat(pa.num ? [[pa.type === "Rd" ? "Road #" : "Street #", pa.num]] : [])
+            .concat([["Contact #", pdfText(c.contact || "-")], ["Payment Type", pdfText(c.payment_type || "-")]]),
+      styles: { fontSize: 9.5, cellPadding: 1.2, textColor: DARK },
+      columnStyles: { 0: { cellWidth: 30, textColor: GREY }, 1: { fontStyle: "bold" } }, margin: { left: 14 }
+    });
+    var y = doc.lastAutoTable.finalY + 5;
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor.apply(doc, DARK); doc.text("Deliveries in this period", 14, y);
+    var del = b.rows.filter(function(e){ return Number(e.given || 0) > 0 || Number(e.received || 0) > 0; });
+    doc.autoTable({
+      startY: y + 2, tableWidth: 140,
+      head: [["Date", "Bottles Delivered", "Bottles Received", "Amount"]],
+      body: del.length ? del.map(function(e){ return [fmtDay(e.date), Number(e.given || 0), Number(e.received || 0), rs(Number(e.given || 0) * Number(e.price_per_bottle || b.price))]; })
+                       : [[{ content: "No deliveries in this period", colSpan: 4, styles: { halign: "center", textColor: GREY } }]],
+      foot: [["Total", b.curBottles, b.curReturned, rs(b.curCharges)]],
+      theme: "grid", styles: { fontSize: 9, cellPadding: 1.6, halign: "center", lineColor: [226, 232, 240] },
+      headStyles: { fillColor: BLUE, textColor: 255 }, footStyles: { fillColor: [240, 244, 255], textColor: DARK, fontStyle: "bold" },
+      columnStyles: { 0: { halign: "left" }, 3: { halign: "right" } }, margin: { left: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 6;
+    if (y > H - 80) { doc.addPage(); y = 18; }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.text("Bill Summary", 14, y);
+    var sumRows = [["Previous balance (till " + fmtDay(dayBefore(b.from)) + ")", b.prevBal < 0 ? "Advance " + rs(-b.prevBal) : rs(b.prevBal)]];
+    b.payments.forEach(function(e){ sumRows.push(["Less: Payment received on " + fmtDay(e.date), "- " + rs(e.cash)]); });
+    if (b.curPaid > 0) {
+      sumRows.push(["   " + rs(b.paidToPrev) + " adjusted against previous balance" + (b.curPaid - b.paidToPrev > 0 ? ", " + rs(b.curPaid - b.paidToPrev) + " against this month" : ""), ""]);
+      sumRows.push(["Previous balance remaining", rs(b.prevRemaining)]);
+    }
+    sumRows.push(["This month: " + b.curBottles + " bottles x Rs " + b.price, rs(b.curCharges)]);
+    if (b.credit > 0) sumRows.push([b.prevBal < 0 ? "Less: Advance applied to this month" : "Less: Rest of payment applied to this month", "- " + rs(b.credit)]);
+    doc.autoTable({
+      startY: y + 2, tableWidth: 140, theme: "plain", body: sumRows,
+      foot: [[b.total < 0 ? "ADVANCE BALANCE" : "TOTAL PAYABLE", b.total < 0 ? rs(-b.total) : rs(b.total)]],
+      styles: { fontSize: 9.5, cellPadding: 1.6, textColor: DARK }, columnStyles: { 1: { halign: "right", cellWidth: 35, fontStyle: "bold" } },
+      footStyles: { fillColor: b.total > 0 ? [254, 226, 226] : [220, 252, 231], textColor: b.total > 0 ? [185, 28, 28] : [21, 128, 61], fontStyle: "bold", fontSize: 12 },
+      didParseCell: function(d){
+        if (d.section === "body" && /adjusted against/.test(String(d.row.raw[0]))) { d.cell.styles.fontSize = 8; d.cell.styles.textColor = GREY; }
+        if (d.section === "foot" && d.column.index === 1) d.cell.styles.halign = "right";
+      },
+      margin: { left: 14 }
+    });
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor.apply(doc, GREY);
+    doc.text("Payments received during the month are first adjusted against the previous balance.", 14, H - 14);
+    doc.text("Thank you for choosing SipSense Water.", 14, H - 9);
+    var safe = pdfText(r.name).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    doc.save("SipSense_Bill_" + safe + "_" + b.from + "_to_" + b.to + ".pdf");
+  } catch (err) { console.error(err); alert("Could not create the PDF: " + err.message); }
+  finally { btn.disabled = false; btn.textContent = old; }
 }
 
 // ===== BACKUP / EXPORT =====
