@@ -422,6 +422,7 @@ Example: 318|2|0|2|
           <div class="field" style="margin:0;"><label>To Date</label><input type="date" id="dsTo"></div>
           <button class="btn secondary" id="dsRefreshBtn" style="margin-bottom:0;">Show Detail</button>
           <button class="btn ghost" id="dsAllBtn" style="margin-bottom:0;">Show All</button>
+          <button class="btn primary" id="dsPdfBtn" style="margin-bottom:0;">⬇ Download PDF</button>
         </div>
         <div id="dsSummaryBox"><div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"><div style="background:#e8f4ff;border-radius:12px;padding:12px 20px;text-align:center;"><div style="font-size:11px;color:#667085;font-weight:600;">Total Bottles</div><div style="font-size:22px;font-weight:800;color:#0f4bd8;">2</div></div><div style="background:#e8faf0;border-radius:12px;padding:12px 20px;text-align:center;"><div style="font-size:11px;color:#667085;font-weight:600;">Total Cash</div><div style="font-size:22px;font-weight:800;color:#19b36b;">Rs 0</div></div><div style="background:#f0f4ff;border-radius:12px;padding:12px 20px;text-align:center;"><div style="font-size:11px;color:#667085;font-weight:600;">Bottles Returned</div><div style="font-size:22px;font-weight:800;color:#667085;">2</div></div><div style="background:#fff8e1;border-radius:12px;padding:12px 20px;text-align:center;"><div style="font-size:11px;color:#667085;font-weight:600;">Days</div><div style="font-size:22px;font-weight:800;color:#f59e0b;">1</div></div></div><div style="margin-bottom:14px;border:1.5px solid #e2e8f0;border-radius:14px;overflow:hidden;"><div style="background:#0f4bd8;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;"><div style="font-weight:800;font-size:15px;">2026-08-22</div><div style="display:flex;gap:16px;font-size:13px;"><span>Bottles: <b>2</b></span><span>Cash: <b>Rs 0</b></span><span>Returned: <b>2</b></span><span>Customers: <b>1</b></span></div></div><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:500px;"><thead><tr style="background:#f0f4ff;"><th style="padding:8px 12px;text-align:left;font-size:12px;color:#667085;font-weight:700;">Time</th><th style="padding:8px 12px;text-align:left;font-size:12px;color:#667085;font-weight:700;">Customer</th><th style="padding:8px 12px;text-align:center;font-size:12px;color:#667085;font-weight:700;">Delivered</th><th style="padding:8px 12px;text-align:right;font-size:12px;color:#667085;font-weight:700;">Cash</th><th style="padding:8px 12px;text-align:center;font-size:12px;color:#667085;font-weight:700;">Returned</th><th style="padding:8px 12px;text-align:left;font-size:12px;color:#667085;font-weight:700;">Type</th><th style="padding:8px 12px;text-align:left;font-size:12px;color:#667085;font-weight:700;">Notes</th><th style="padding:8px 12px;text-align:center;font-size:12px;color:#667085;font-weight:700;">Action</th></tr></thead><tbody><tr style="background:#fff;border-top:1px solid #f0f4ff;"><td style="padding:8px 12px;color:#667085;font-size:13px;">05:13 PM</td><td style="padding:8px 12px;font-weight:600;">A.R Hyder – Villa 30 – St 5 - Sports City</td><td style="padding:8px 12px;text-align:center;font-weight:700;color:#0f4bd8;">2</td><td style="padding:8px 12px;text-align:right;color:#ccc;">-</td><td style="padding:8px 12px;text-align:center;color:#667085;">2</td><td style="padding:8px 12px;font-size:12px;color:#667085;">Prepaid Book</td><td style="padding:8px 12px;font-size:12px;color:#888;max-width:160px;"></td><td style="padding:8px 12px;text-align:center;white-space:nowrap;"><button class="actionbtn edit" data-eid="live_1789404694918" onclick="editLedgerEntryById(this.dataset.eid)">Edit</button> <button class="actionbtn delete" data-eid="live_1789404694918" onclick="deleteLedgerEntryById(this.dataset.eid)">Delete</button></td></tr></tbody></table></div></div></div></div>
       </div>
@@ -1399,6 +1400,7 @@ function bindActions() {
   document.getElementById("saveAppBtn").addEventListener("click", saveAppAsHTML);
   document.getElementById("dsRefreshBtn").addEventListener("click", function(){ renderDateSummary(false); });
   document.getElementById("dsAllBtn").addEventListener("click", function(){ renderDateSummary(true); });
+  document.getElementById("dsPdfBtn").addEventListener("click", downloadDateSummaryPDF);
   document.getElementById("pnlRefreshBtn").addEventListener("click", function(){ renderPnL(false); });
   document.getElementById("pnlAllBtn").addEventListener("click", function(){ renderPnL(true); });
   document.getElementById("addExpenseBtn").addEventListener("click", addExpense);
@@ -2019,6 +2021,156 @@ function saveAppAsHTML() {
 }
 
 
+
+// ===== DATE SUMMARY PDF DOWNLOAD =====
+function loadScriptOnce(src) {
+  return new Promise(function(resolve, reject) {
+    if (document.querySelector('script[data-src="'+src+'"]')) { resolve(); return; }
+    var s = document.createElement("script");
+    s.src = src; s.setAttribute("data-src", src);
+    s.onload = function(){ resolve(); };
+    s.onerror = function(){ reject(new Error("Could not load " + src)); };
+    document.head.appendChild(s);
+  });
+}
+function pdfText(v) {
+  // Standard PDF fonts can't show some characters (e.g. the long dash), so swap them.
+  return String(v == null ? "" : v).replace(/[–—]/g, "-").replace(/[^\x20-\x7E -ÿ]/g, "");
+}
+function dsTimeKey(t) {
+  var m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (!m) return 0;
+  var h = Number(m[1]) % 12; if ((m[3] || "").toUpperCase() === "PM") h += 12;
+  if (!m[3] && Number(m[1]) >= 12) h = Number(m[1]);
+  return h * 60 + Number(m[2]);
+}
+async function downloadDateSummaryPDF() {
+  var btn = document.getElementById("dsPdfBtn");
+  var from = document.getElementById("dsFrom").value || "";
+  var to   = document.getElementById("dsTo").value || "";
+  var rows = entries.filter(function(e){ return (!from || e.date >= from) && (!to || e.date <= to); });
+  if (!rows.length) { alert("No entries found for this date range."); return; }
+  var oldLabel = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Preparing PDF..."; }
+  try {
+    await loadScriptOnce("/vendor/jspdf.umd.min.js");
+    await loadScriptOnce("/vendor/jspdf.plugin.autotable.min.js");
+    var jsPDF = window.jspdf.jsPDF;
+    var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    var pageW = doc.internal.pageSize.getWidth();
+    var BLUE = [15, 75, 216], GREY = [102, 112, 133];
+
+    var map = {};
+    rows.forEach(function(e){ var d = e.date || "Unknown"; (map[d] = map[d] || []).push(e); });
+    var dates = Object.keys(map).sort().reverse();
+    var sum = function(list, k){ return list.reduce(function(a, b){ return a + Number(b[k] || 0); }, 0); };
+    var tG = sum(rows, "given"), tC = sum(rows, "cash"), tR = sum(rows, "received");
+    var rangeTxt = (from || to)
+      ? ((from ? prettyDate(from) + " " + from.slice(0, 4) : "Start") + " to " + (to ? prettyDate(to) + " " + to.slice(0, 4) : "Today"))
+      : "All dates (" + dates[dates.length - 1] + " to " + dates[0] + ")";
+
+    doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor(15, 23, 42);
+    doc.text("SipSense - Date Summary", 12, 15);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor.apply(doc, GREY);
+    doc.text(pdfText(rangeTxt + "   |   Downloaded " + new Date().toLocaleString()), 12, 21);
+
+    // Summary boxes
+    var boxes = [
+      ["Total Bottles", String(tG), [232, 244, 255], BLUE],
+      ["Total Cash", "Rs " + tC.toLocaleString(), [232, 250, 240], [25, 179, 107]],
+      ["Bottles Returned", String(tR), [240, 244, 255], GREY],
+      ["Days", String(dates.length), [255, 248, 225], [245, 158, 11]],
+      ["Entries", String(rows.length), [244, 244, 245], [15, 23, 42]]
+    ];
+    var bw = (pageW - 24 - 4 * 4) / 5;
+    boxes.forEach(function(b, i){
+      var x = 12 + i * (bw + 4);
+      doc.setFillColor.apply(doc, b[2]); doc.roundedRect(x, 25, bw, 15, 2, 2, "F");
+      doc.setFontSize(8); doc.setFont("helvetica", "bold"); doc.setTextColor.apply(doc, GREY);
+      doc.text(b[0], x + bw / 2, 30.5, { align: "center" });
+      doc.setFontSize(13); doc.setTextColor.apply(doc, b[3]);
+      doc.text(b[1], x + bw / 2, 37, { align: "center" });
+    });
+
+    // Daily totals table
+    doc.autoTable({
+      startY: 45,
+      head: [["Date", "Day", "Customers", "Bottles Delivered", "Cash Received", "Bottles Returned"]],
+      body: dates.map(function(d){
+        var r = map[d], dt = new Date(d + "T00:00:00");
+        return [d, dt.toLocaleDateString("en-GB", { weekday: "short" }), r.length, sum(r, "given"),
+                sum(r, "cash") ? "Rs " + sum(r, "cash").toLocaleString() : "-", sum(r, "received")];
+      }),
+      foot: [["Total", dates.length + " days", rows.length, tG, "Rs " + tC.toLocaleString(), tR]],
+      theme: "grid",
+      styles: { fontSize: 8.5, cellPadding: 1.6, halign: "center", lineColor: [226, 232, 240] },
+      headStyles: { fillColor: BLUE, textColor: 255, fontStyle: "bold" },
+      footStyles: { fillColor: [255, 248, 225], textColor: [15, 23, 42], fontStyle: "bold" },
+      columnStyles: { 0: { halign: "left" }, 4: { halign: "right" } },
+      margin: { left: 12, right: 12 }
+    });
+
+    // Day-wise detail
+    doc.addPage();
+    doc.setFont("helvetica", "bold"); doc.setFontSize(13); doc.setTextColor(15, 23, 42);
+    doc.text("Day-wise entry detail", 12, 14);
+    var y = 18;
+    dates.forEach(function(d){
+      var list = map[d].slice().sort(function(a, b){ return dsTimeKey(a.time) - dsTimeKey(b.time); });
+      var dt = new Date(d + "T00:00:00");
+      var title = dt.toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+      var info = "Bottles: " + sum(list, "given") + "    Cash: Rs " + sum(list, "cash").toLocaleString() +
+                 "    Returned: " + sum(list, "received") + "    Customers: " + list.length;
+      if (y > doc.internal.pageSize.getHeight() - 40) { doc.addPage(); y = 14; }
+      doc.autoTable({
+        startY: y,
+        head: [[{ content: pdfText(title), colSpan: 2, styles: { halign: "left", fontSize: 10 } },
+                { content: pdfText(info), colSpan: 5, styles: { halign: "right", fontStyle: "normal" } }],
+               ["Time", "Customer", "Delivered", "Cash", "Returned", "Type", "Notes"]],
+        body: list.map(function(e){
+          return [pdfText(e.time), pdfText(e.customer || e.customer_name), Number(e.given || 0),
+                  Number(e.cash || 0) ? "Rs " + Number(e.cash).toLocaleString() : "-",
+                  Number(e.received || 0), pdfText(e.payment_type), pdfText(e.notes)];
+        }),
+        theme: "grid",
+        rowPageBreak: "avoid",
+        styles: { fontSize: 8, cellPadding: 1.4, lineColor: [226, 232, 240], valign: "middle" },
+        headStyles: { fillColor: BLUE, textColor: 255, fontStyle: "bold" },
+        didParseCell: function(data){
+          if (data.section === "head" && data.row.index === 1) {
+            data.cell.styles.fillColor = [240, 244, 255]; data.cell.styles.textColor = GREY;
+          }
+          if (data.section === "body" && data.column.index === 2) {
+            data.cell.styles.textColor = BLUE; data.cell.styles.fontStyle = "bold";
+          }
+        },
+        columnStyles: {
+          0: { cellWidth: 18, textColor: GREY }, 1: { cellWidth: 75 }, 2: { cellWidth: 18, halign: "center" },
+          3: { cellWidth: 24, halign: "right" }, 4: { cellWidth: 18, halign: "center" },
+          5: { cellWidth: 32, textColor: GREY }, 6: { cellWidth: "auto", fontSize: 7, textColor: [85, 85, 85] }
+        },
+        showHead: "everyPage",
+        margin: { left: 12, right: 12 }
+      });
+      y = doc.lastAutoTable.finalY + 6;
+    });
+
+    var pages = doc.internal.getNumberOfPages();
+    for (var p = 1; p <= pages; p++) {
+      doc.setPage(p); doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor.apply(doc, GREY);
+      doc.text("SipSense - Date Summary", 12, doc.internal.pageSize.getHeight() - 6);
+      doc.text("Page " + p + " of " + pages, pageW - 12, doc.internal.pageSize.getHeight() - 6, { align: "right" });
+    }
+    var fname = "SipSense_Date_Summary_" + (from || to ? (from || "start") + "_to_" + (to || todayISO()) : "All_" + todayISO()) + ".pdf";
+    doc.save(fname);
+    if (typeof showToast === "function") showToast("PDF downloaded");
+  } catch (err) {
+    console.error(err);
+    alert("Could not create the PDF: " + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldLabel; }
+  }
+}
 
 function renderDateSummary(showAll) {
   var from = showAll ? "" : (document.getElementById("dsFrom").value || "");
