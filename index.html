@@ -315,11 +315,16 @@ Example: 318|2|0|2|
         </div>
         <div id="daySummary" style="padding:12px 16px;background:#eef2ff;border-radius:12px;font-weight:700;color:#2d3192;margin-bottom:12px;"></div>
         <div class="btnrow" style="flex-wrap:wrap;gap:8px;">
-          <button class="btn primary" id="daySendNextBtn" style="background:#25d366;font-size:16px;padding:12px 26px;">&#9654; Send Next</button>
+          <button class="btn primary" id="daySendNextBtn" style="background:#25d366;font-size:16px;padding:12px 26px;">&#9654; Start Sending</button>
           <button class="btn ghost" id="dayCopyAllBtn">Copy All Messages</button>
-          <button class="btn ghost" id="dayResetBtn">Clear Sent Ticks</button>
+          <button class="btn ghost" id="dayResetBtn">Clear Marks</button>
           <button class="btn ghost" id="dayBackupBtn">Download Backup</button>
         </div>
+      </div>
+      <div class="card" id="dayFailedCard" style="margin-top:14px;display:none;border:2px solid #fecaca;background:#fff5f5;">
+        <h2 style="color:#b91c1c;margin-bottom:6px;">&#10007; Not sent</h2>
+        <div class="small" style="margin-bottom:8px;">These messages did not go. Tap Retry, or call the customer.</div>
+        <div id="dayFailedList"></div>
       </div>
       <div class="card" style="margin-top:14px;padding-top:6px;">
         <div id="dayList"></div>
@@ -1089,8 +1094,13 @@ var dayRowsCache = [];
 function daySentKey() {
   return "ss_sent_" + (document.getElementById("dayDate").value || todayISO()) + "_" + document.getElementById("dayWho").value;
 }
-function dayLoadSent() { try { return JSON.parse(localStorage.getItem(daySentKey()) || "{}"); } catch (e) { return {}; } }
+function dayLoadSent() {
+  try { var o = JSON.parse(localStorage.getItem(daySentKey()) || "{}");
+        Object.keys(o).forEach(function(k){ if (o[k] === true) o[k] = "sent"; }); return o; } catch (e) { return {}; }
+}
 function daySaveSent(o) { try { localStorage.setItem(daySentKey(), JSON.stringify(o)); } catch (e) {} }
+function dayGetPending() { try { return JSON.parse(localStorage.getItem("ss_day_pending") || "null"); } catch (e) { return null; } }
+function daySetPending(p) { try { if (p) localStorage.setItem("ss_day_pending", JSON.stringify(p)); else localStorage.removeItem("ss_day_pending"); } catch (e) {} }
 function dayCollect() {
   var d = document.getElementById("dayDate").value || todayISO();
   var who = document.getElementById("dayWho").value;
@@ -1118,19 +1128,33 @@ function renderDayList() {
   var who = document.getElementById("dayWho").value;
   dayRowsCache = dayCollect();
   var sent = dayLoadSent();
-  var nSent = dayRowsCache.filter(function(r){ return sent[r.key]; }).length;
+  var nSent = dayRowsCache.filter(function(r){ return sent[r.key] === "sent"; }).length;
+  var failedRows = dayRowsCache.filter(function(r){ return sent[r.key] === "failed"; });
+  var left = dayRowsCache.length - nSent - failedRows.length;
+  var nb = document.getElementById("daySendNextBtn");
+  if (nb) nb.innerHTML = (nSent + failedRows.length) ? (left ? "&#9654; Continue Sending (" + left + " left)" : "&#10003; All done") : "&#9654; Start Sending";
+  var fc = document.getElementById("dayFailedCard");
+  if (fc) {
+    fc.style.display = failedRows.length ? "block" : "none";
+    document.getElementById("dayFailedList").innerHTML = failedRows.map(function(r){
+      return "<div style='display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #fecaca;'><div style='flex:1;'><b>" + esc(r.name) + "</b><br><span style='font-size:12px;color:#667085;'>" +
+        esc(r.address) + " · " + esc(r.phone || "No phone") + "</span></div>" +
+        "<button class='btn primary' style='margin:0;padding:8px 14px;background:#25d366;' onclick='dayRetry(" + JSON.stringify(r.key).replace(/'/g, "&#39;") + ")'>Retry</button>" +
+        (r.phone ? "<a class='btn ghost' style='margin:0;padding:8px 14px;text-decoration:none;' href='tel:" + esc(r.phone) + "'>Call</a>" : "") + "</div>";
+    }).join("");
+  }
   var bottles = dayRowsCache.reduce(function(a, r){ return a + (who === "month" ? r.month : r.today); }, 0);
   document.getElementById("daySummary").innerHTML = dayRowsCache.length
     ? dayRowsCache.length + " customers &nbsp;·&nbsp; " + bottles + " bottles " + (who === "month" ? "this month" : "on " + esc(fmtDay(d))) +
-      " &nbsp;·&nbsp; <span style='color:#15803d;'>" + nSent + " of " + dayRowsCache.length + " sent</span>"
+      " &nbsp;·&nbsp; <span style='color:#15803d;'>" + nSent + " sent</span>" + (failedRows.length ? " &nbsp;·&nbsp; <span style='color:#b91c1c;'>" + failedRows.length + " not sent</span>" : "") + " &nbsp;·&nbsp; " + left + " left"
     : "No deliveries found " + (who === "month" ? "this month" : "on " + esc(fmtDay(d))) + ".";
   if (!dayRowsCache.length) { box.innerHTML = "<div style='padding:18px;color:#667085;'>Nothing to send.</div>"; return; }
   box.innerHTML = dayRowsCache.map(function(r, i){
-    var done = !!sent[r.key];
+    var stt = sent[r.key], done = stt === "sent", bad = stt === "failed";
     var qty = who === "month" ? r.month + " btl this month" : r.today + " btl today";
-    return "<div style='display:flex;gap:12px;align-items:center;padding:12px 4px;border-bottom:1px solid #edf1f7;" + (done ? "background:#f0fdf4;" : "") + "'>" +
+    return "<div style='display:flex;gap:12px;align-items:center;padding:12px 4px;border-bottom:1px solid #edf1f7;" + (done ? "background:#f0fdf4;" : bad ? "background:#fff5f5;" : "") + "'>" +
       "<div style='flex:0 0 34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;" +
-        (done ? "background:#19b36b;color:#fff;'>&#10003;" : "background:#eef2ff;color:#2d3192;'>" + (i + 1)) + "</div>" +
+        (done ? "background:#19b36b;color:#fff;'>&#10003;" : bad ? "background:#ef4444;color:#fff;'>&#10007;" : "background:#eef2ff;color:#2d3192;'>" + (i + 1)) + "</div>" +
       "<div style='flex:1;min-width:0;'>" +
         "<div style='font-weight:800;font-size:15px;'>" + esc(r.name) + "</div>" +
         "<div style='font-size:13px;color:#475569;'>" + esc(r.address) + "</div>" +
@@ -1139,8 +1163,8 @@ function renderDayList() {
           " &nbsp;·&nbsp; <a href='#' style='color:#2d3192;' onclick='dayTogglePreview(" + i + ");return false;'>View message</a></div>" +
         "<div id='dayPrev_" + i + "' style='display:none;white-space:pre-wrap;font-size:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-top:8px;'></div>" +
       "</div>" +
-      "<button class='btn primary' style='flex:0 0 auto;padding:10px 16px;margin:0;background:" + (done ? "#94a3b8" : "#25d366") + ";' " + (r.url ? "" : "disabled ") +
-        "onclick='daySend(" + i + ")'>" + (done ? "Sent &#10003;" : "Send") + "</button>" +
+      "<button class='btn primary' style='flex:0 0 auto;padding:10px 16px;margin:0;background:" + (done ? "#94a3b8" : bad ? "#ef4444" : "#25d366") + ";' " + (r.url ? "" : "disabled ") +
+        "onclick='daySend(" + i + ")'>" + (done ? "Sent &#10003;" : bad ? "Retry" : "Send") + "</button>" +
     "</div>";
   }).join("");
 }
@@ -1148,19 +1172,54 @@ function dayTogglePreview(i) {
   var el = document.getElementById("dayPrev_" + i); if (!el) return;
   if (el.style.display === "none") { el.textContent = dayRowsCache[i].msg; el.style.display = "block"; } else el.style.display = "none";
 }
-function daySend(i) {
+// Opens WhatsApp for one customer and remembers it, so when you come back the app asks
+// "Sent / Not sent". While a sending run is on, answering opens the next customer straight away.
+function daySend(i, auto) {
   var r = dayRowsCache[i]; if (!r) return;
   if (!r.url) { alert("No phone number for " + r.name + ". Add it in Customer Management."); return; }
+  daySetPending({ key: r.key, name: r.name, statusKey: daySentKey(), run: !!auto || !!(dayGetPending() || {}).run, t: Date.now() });
   window.open(r.url, "_blank");
-  var sent = dayLoadSent(); sent[r.key] = true; daySaveSent(sent);
-  renderDayList();
+  setTimeout(dayShowConfirm, 1200);
+}
+function dayNextIndex() {
+  var st = dayLoadSent();
+  for (var i = 0; i < dayRowsCache.length; i++) if (!st[dayRowsCache[i].key] && dayRowsCache[i].url) return i;
+  return -1;
 }
 function daySendNext() {
-  var sent = dayLoadSent();
-  for (var i = 0; i < dayRowsCache.length; i++) {
-    if (!sent[dayRowsCache[i].key] && dayRowsCache[i].url) { daySend(i); return; }
-  }
-  alert(dayRowsCache.length ? "All messages sent ✅" : "Nothing to send for this date.");
+  var i = dayNextIndex();
+  if (i < 0) { dayFinishRun(); return; }
+  daySend(i, true);
+}
+function dayFinishRun() {
+  daySetPending(null); dayHideConfirm(); renderDayList();
+  var st = dayLoadSent(), failed = dayRowsCache.filter(function(r){ return st[r.key] === "failed"; }).length;
+  alert(dayRowsCache.length ? ("All done ✅" + (failed ? "\n" + failed + " message(s) NOT sent - see the red list." : "")) : "Nothing to send for this date.");
+}
+function dayShowConfirm() {
+  var p = dayGetPending(), bar = document.getElementById("dayConfirmBar"); if (!bar) return;
+  if (!p) { bar.style.display = "none"; return; }
+  document.getElementById("dayConfirmText").innerHTML = "Did the message to <span style='color:#2d3192;'>" + esc(p.name) + "</span> go?" +
+    (p.run ? "<div style='font-size:12px;color:#667085;font-weight:600;margin-top:2px;'>Your answer opens the next customer.</div>" : "");
+  document.getElementById("dayConfirmPause").style.display = p.run ? "" : "none";
+  bar.style.display = "block";
+}
+function dayHideConfirm() { var bar = document.getElementById("dayConfirmBar"); if (bar) bar.style.display = "none"; }
+function dayAnswer(ok) {
+  var p = dayGetPending(); if (!p) { dayHideConfirm(); return; }
+  try { var st = JSON.parse(localStorage.getItem(p.statusKey) || "{}"); st[p.key] = ok ? "sent" : "failed";
+        localStorage.setItem(p.statusKey, JSON.stringify(st)); } catch (e) {}
+  daySetPending(null); dayHideConfirm(); renderDayList();
+  if (p.run && p.statusKey === daySentKey()) daySendNext();   // keep going with the next customer
+}
+function dayPause() {
+  // Stop after this customer: still ask whether this last message went, but don't open the next one.
+  var p = dayGetPending(); if (p) { p.run = false; daySetPending(p); }
+  dayShowConfirm(); showToast("Paused - tap Continue Sending to resume");
+}
+function dayRetry(key) {
+  var i = dayRowsCache.findIndex(function(r){ return r.key === key; }); if (i < 0) return;
+  daySend(i, false);
 }
 function dayCopyAll() {
   if (!dayRowsCache.length) return alert("Nothing to copy.");
@@ -1646,9 +1705,15 @@ function bindActions() {
   document.getElementById("daySendNextBtn").addEventListener("click", daySendNext);
   document.getElementById("dayCopyAllBtn").addEventListener("click", dayCopyAll);
   document.getElementById("dayResetBtn").addEventListener("click", function(){
-    if (!confirm("Clear the green 'sent' ticks for this list?")) return;
-    daySaveSent({}); renderDayList();
+    if (!confirm("Clear all sent / not sent marks for this list?")) return;
+    daySaveSent({}); daySetPending(null); dayHideConfirm(); renderDayList();
   });
+  document.getElementById("dayConfirmSent").addEventListener("click", function(){ dayAnswer(true); });
+  document.getElementById("dayConfirmFailed").addEventListener("click", function(){ dayAnswer(false); });
+  document.getElementById("dayConfirmPause").addEventListener("click", dayPause);
+  document.addEventListener("visibilitychange", function(){ if (document.visibilityState === "visible") dayShowConfirm(); });
+  window.addEventListener("focus", dayShowConfirm);
+  dayShowConfirm();
   document.querySelector('.tab[data-tab="day"]').addEventListener("click", function(){ setTimeout(renderDayList, 0); });
   document.getElementById("dayBackupBtn").addEventListener("click", () => downloadBackup(true));
   document.getElementById("generateBillBtn").addEventListener("click", generateBill);
@@ -2856,4 +2921,12 @@ function openWaUrl(btn) {
 </script>
 
 
+<div id="dayConfirmBar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#fff;border-top:3px solid #25d366;box-shadow:0 -6px 24px rgba(0,0,0,.18);padding:14px 16px calc(14px + env(safe-area-inset-bottom));">
+  <div id="dayConfirmText" style="font-weight:800;font-size:15px;color:#0f172a;margin-bottom:10px;"></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn primary" id="dayConfirmSent" style="background:#19b36b;margin:0;flex:1 1 140px;font-size:15px;">&#10003; Sent</button>
+    <button class="btn" id="dayConfirmFailed" style="background:#ef4444;color:#fff;margin:0;flex:1 1 140px;font-size:15px;">&#10007; Not sent</button>
+    <button class="btn ghost" id="dayConfirmPause" style="margin:0;flex:0 1 auto;">Pause</button>
+  </div>
+</div>
 </body></html>
