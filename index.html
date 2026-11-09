@@ -1929,6 +1929,8 @@ function buildWAMessage(customer, key, from, to) {
 }
 
 // Also keep buildDeliveryMessage for Close the Day compatibility
+// WhatsApp has no underline style; a combining low line after each character draws one.
+function underlineText(t) { return Array.from(String(t)).map(function(ch){ return ch + "\u0332"; }).join(""); }
 function buildDeliveryMessage(customer, d) {
   d = d || todayISO();
   var first = entries.find(function(e){ return e.customer === customer && e.date === d; }) ||
@@ -1947,11 +1949,12 @@ function buildDeliveryMessage(customer, d) {
   var monthName = new Date(d + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   var NL = "\n";
   var m = "*SipSense - Purified Drinking Water* 💧" + NL;
-  m += "*" + (cust.address || first.address || customer) + "*" + NL + NL;
-  m += "*Deliveries for " + monthName + "*" + NL;
+  m += "*" + (cust.address || first.address || customer) + "*" + NL;
+  m += "\u2501".repeat(20) + NL + NL;                                   // full line under the address
+  m += "*" + underlineText("Deliveries for " + monthName) + "*" + NL;   // underlined heading
   days.forEach(function(k){
     var line = new Date(k + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) + "  -  " + byDay[k] + (byDay[k] === 1 ? " bottle" : " bottles");
-    m += (k === d ? "*" + line + "*" : line) + NL;
+    m += (k === d ? "*" + line + "* \u2713" : line) + NL;               // today's delivery gets a tick
   });
   if (!days.length) m += "No deliveries yet this month" + NL;
   m += NL + "*Total deliveries this month: " + total + (total === 1 ? " bottle" : " bottles") + "*";
