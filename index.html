@@ -572,13 +572,28 @@ Example: 318|2|0|2|
       </div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>Searchable Name</label><input id="popupSearchable"></div>
+      <div class="field"><label>Searchable Name</label><input id="popupSearchable" placeholder="Optional - villa # is added automatically"></div>
       <div class="field"><label>Customer Name</label><input id="popupCustomerName"></div>
     </div>
     <div class="grid-2">
       <div class="field"><label>Contact #</label><input id="popupContact"></div>
-      <div class="field"><label>Address</label><input id="popupAddress"></div>
+      <div class="field"><label>Area</label>
+        <select id="popupArea">
+          <option value="P31">P31</option>
+          <option value="Sports City">Sports City</option>
+        </select>
+      </div>
     </div>
+    <div class="grid-2">
+      <div class="field"><label>Villa #</label><input id="popupVilla" placeholder="e.g. 318 or 33A"></div>
+      <div class="field" id="popupStreetWrap" style="display:none;"><label>Street / Road #</label>
+        <div style="display:flex;gap:8px;">
+          <select id="popupStreetType" style="max-width:90px;"><option value="St.">St.</option><option value="Rd">Rd</option></select>
+          <input id="popupStreetNo" placeholder="e.g. 44 or 29B">
+        </div>
+      </div>
+    </div>
+    <div class="field"><label>Address (filled automatically)</label><input id="popupAddress" readonly style="background:#eef2f7;"></div>
     <div class="grid-2">
       <div class="field"><label>Payment Type</label>
         <select id="popupPaymentType">
@@ -810,6 +825,12 @@ function pickPopupCustomer(c) {
   document.getElementById("popupCustomerName").value = c.customer_name;
   document.getElementById("popupContact").value = c.contact;
   document.getElementById("popupAddress").value = c.address;
+  var pa = parseAddress(c.address);
+  document.getElementById("popupArea").value = pa.area || "P31";
+  document.getElementById("popupVilla").value = pa.villa;
+  document.getElementById("popupStreetType").value = pa.type || "St.";
+  document.getElementById("popupStreetNo").value = pa.num;
+  updatePopupAddress();
   document.getElementById("popupPaymentType").value = c.payment_type;
   document.getElementById("popupPrice").value = c.price_per_bottle;
   document.getElementById("popupDeliverySchedule").value = c.delivery_schedule || "Alternate Days";
@@ -1122,6 +1143,80 @@ function renderCustomerList() {
   var countEl = document.getElementById("customerListCount");
   if (countEl) countEl.textContent = "Showing " + rows.length + " of " + customers.length + " customers";
 }
+// ===== ADDRESS FORMAT HELPERS =====
+function normalizeStreetText(t) {
+  return String(t || "").replace(/\b(?:street|st)\.?\s*(\d+[a-z]?)\b/gi, function(_, n){ return "St. " + n.toUpperCase(); })
+                        .replace(/\b(?:road|rd)\.?\s*-?\s*(\d+[a-z]?)\b/gi, function(_, n){ return "Rd " + n.toUpperCase(); });
+}
+function parseAddress(addr) {
+  var a = normalizeStreetText(String(addr || "").replace(/[–—]/g, "-"));
+  var v = a.match(/vil+a\s*([0-9]+[a-z]?(?:\/[0-9]+)?)/i) || a.match(/^\s*([0-9]+[a-z]?(?:\/[0-9]+)?)\b/i);
+  var st = a.match(/\b(St\.|Rd)\s+([0-9]+[A-Z]?)/);
+  var area = /p\s*-?\s*31/i.test(a) ? "P31" : (/sports\s*city/i.test(a) || st ? "Sports City" : "");
+  return { villa: v ? v[1].toUpperCase() : "", type: st ? st[1] : "", num: st ? st[2] : "", area: area };
+}
+function formatAddress(area, villa, type, num) {
+  villa = String(villa || "").trim().replace(/^villa\s*/i, "").toUpperCase();
+  num = String(num || "").trim().toUpperCase();
+  if (!villa) return "";
+  if (area === "P31") return "Villa " + villa + " - P31";
+  return "Villa " + villa + (num ? " - " + (type || "St.") + " " + num : "") + " - Sports City";
+}
+function normalizeAddress(addr) {
+  var p = parseAddress(addr);
+  if (!p.villa || !p.area) return addr;  // can't safely reformat (e.g. MISC) - leave as it is
+  return formatAddress(p.area, p.villa, p.type, p.num);
+}
+function updatePopupAddress() {
+  var area = document.getElementById("popupArea").value;
+  document.getElementById("popupStreetWrap").style.display = area === "Sports City" ? "block" : "none";
+  document.getElementById("popupAddress").value = formatAddress(area,
+    document.getElementById("popupVilla").value,
+    document.getElementById("popupStreetType").value,
+    area === "Sports City" ? document.getElementById("popupStreetNo").value : "");
+}
+function relinkEntries(oldC, newC) {
+  var n = 0;
+  entries.forEach(function(e){
+    var match = (oldC.searchable && e.searchable === oldC.searchable) ||
+                (oldC.display && e.customer === oldC.display);
+    if (!match) return;
+    e.searchable = newC.searchable; e.customer = newC.display; e.customer_name = newC.customer_name;
+    e.address = newC.address; e.area = newC.area || e.area || "";
+    n++;
+  });
+  return n;
+}
+// Runs once after loading: tidies addresses into the standard format and re-attaches
+// entries that lost their customer after the customer's details were edited.
+function repairDataOnLoad() {
+  var changed = 0;
+  customers.forEach(function(c){
+    var na = normalizeAddress(c.address), ns = normalizeStreetText(c.searchable), ar = parseAddress(na).area;
+    if (na !== c.address || ns !== c.searchable || (ar && c.area !== ar)) {
+      c.address = na; c.searchable = ns; if (ar) c.area = ar;
+      c.display = (c.customer_name + " – " + c.address).replace(/^\s*–\s*|\s*–\s*$/g, "");
+      c.keywords = [c.searchable, c.customer_name, c.address, c.contact, c.payment_type, c.area].filter(Boolean).join(" | ");
+      changed++;
+    }
+  });
+  var keys = {}; customers.forEach(function(c){ keys[(c.searchable || "").toLowerCase()] = true; });
+  var byName = {};
+  customers.forEach(function(c){ var k = (c.customer_name || "").toLowerCase(); byName[k] = byName[k] ? "dup" : c; });
+  entries.forEach(function(e){
+    if (keys[(e.searchable || "").toLowerCase()]) {
+      var na = normalizeAddress(e.address);
+      if (na !== e.address) { e.address = na; changed++; }
+      return;
+    }
+    var c = byName[(e.customer_name || "").toLowerCase()];
+    if (!c || c === "dup") return;  // no single owner found - leave untouched
+    e.searchable = c.searchable; e.customer = c.display; e.address = c.address; e.area = c.area || e.area || "";
+    changed++;
+  });
+  if (changed) { console.log("Data tidy-up: " + changed + " records updated"); saveState(); }
+  return changed;
+}
 function applyLeftCustomerDefaults(c) {
   // When a customer's status becomes "Left", auto-default their Payment Type to "No Payment"
   // and Delivery Schedule to "No Delivery", per business rule.
@@ -1191,7 +1286,10 @@ function openPopup(mode) {
   document.getElementById("customerPopup").classList.add("show");
   document.getElementById("popupTitle").innerText = mode === "add" ? "Add New Customer" : "Update Existing Customer";
   document.getElementById("popupSearchWrap").style.display = mode === "edit" ? "block" : "none";
-  ["popupFindCustomer","popupSearchable","popupCustomerName","popupContact","popupAddress","popupPrice"].forEach(id => document.getElementById(id).value = "");
+  ["popupFindCustomer","popupSearchable","popupCustomerName","popupContact","popupAddress","popupPrice","popupVilla","popupStreetNo"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("popupArea").value = "P31";
+  document.getElementById("popupStreetType").value = "St.";
+  updatePopupAddress();
   document.getElementById("popupPaymentType").value = "Cash";
   document.getElementById("popupDeliverySchedule").value = "Alternate Days";
   document.getElementById("popupStatus").value = "Active";
@@ -1200,6 +1298,21 @@ function closePopup() {
   document.getElementById("customerPopup").classList.remove("show");
 }
 function savePopupCustomer() {
+  var villa = document.getElementById("popupVilla").value.trim().replace(/^villa\s*/i, "");
+  var area = document.getElementById("popupArea").value;
+  if (!villa) { alert("Please enter the Villa #."); return; }
+  if (area === "Sports City" && !document.getElementById("popupStreetNo").value.trim()) {
+    if (!confirm("No Street / Road # entered. Save without it?")) return;
+  }
+  updatePopupAddress();
+  var nameIn = document.getElementById("popupCustomerName").value.trim();
+  if (!nameIn) { alert("Please enter the Customer Name."); return; }
+  var srch = document.getElementById("popupSearchable").value.trim();
+  if (!srch) srch = nameIn.replace(/^(mr|mrs|ms|dr|maj)\.?\s+/i, "");
+  srch = normalizeStreetText(srch);
+  if (/villa\s*[0-9]+[a-z]?(?:\/[0-9]+)?/i.test(srch)) srch = srch.replace(/villa\s*[0-9]+[a-z]?(?:\/[0-9]+)?/i, "Villa " + villa);
+  else srch += " - Villa " + villa;
+  document.getElementById("popupSearchable").value = srch;
   const c = {
     searchable: document.getElementById("popupSearchable").value.trim(),
     customer_name: document.getElementById("popupCustomerName").value.trim(),
@@ -1208,7 +1321,8 @@ function savePopupCustomer() {
     payment_type: document.getElementById("popupPaymentType").value,
     price_per_bottle: Number(document.getElementById("popupPrice").value || 140),
     delivery_schedule: document.getElementById("popupDeliverySchedule").value,
-    status: document.getElementById("popupStatus").value
+    status: document.getElementById("popupStatus").value,
+    area: document.getElementById("popupArea").value
   };
   applyLeftCustomerDefaults(c);
   c.display = (c.customer_name + " – " + c.address).replace(/^\s*–\s*|\s*–\s*$/g, "");
@@ -1217,7 +1331,13 @@ function savePopupCustomer() {
     customers.push(c);
   } else {
     const idx = customers.findIndex(x => (x.searchable || x.display) === editingKey);
-    if (idx >= 0) customers[idx] = c;
+    if (idx >= 0) {
+      var old = customers[idx];
+      customers[idx] = c;
+      // Keep this customer's past entries linked to the updated name / address.
+      var moved = relinkEntries(old, c);
+      if (moved) showToast(moved + " past entries updated to the new details");
+    }
   }
   saveState();
   renderCustomerList();
@@ -1394,6 +1514,10 @@ function bindActions() {
   document.getElementById("addCustomerBtn").addEventListener("click", () => openPopup("add"));
   document.getElementById("editCustomerBtn").addEventListener("click", () => openPopup("edit"));
   document.getElementById("popupSaveBtn").addEventListener("click", savePopupCustomer);
+  ["popupArea","popupVilla","popupStreetType","popupStreetNo"].forEach(function(id){
+    var el = document.getElementById(id);
+    el.addEventListener("input", updatePopupAddress); el.addEventListener("change", updatePopupAddress);
+  });
   document.getElementById("popupCancelBtn").addEventListener("click", closePopup);
   document.getElementById("backupJsonBtn").addEventListener("click", () => downloadBackup(true));
   document.getElementById("backupCsvBtn").addEventListener("click", downloadCSV);
@@ -1498,6 +1622,7 @@ function bindReceivedToggle() {
 
 window.addEventListener("load", async () => {
   await loadState();
+  if (__stateLoaded) { try { repairDataOnLoad(); } catch (err) { console.error("tidy-up failed", err); } }
   bindTabs();
   bindReceivedToggle();
   bindReceivedAutofill();
