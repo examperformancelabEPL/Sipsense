@@ -2492,10 +2492,18 @@ function bindKamran() {
 function routeCustomers(days) {
   var since = new Date(); since.setDate(since.getDate() - (days || 30));
   var sinceIso = since.getFullYear() + "-" + String(since.getMonth() + 1).padStart(2, "0") + "-" + String(since.getDate()).padStart(2, "0");
-  var recent = {};
-  entries.forEach(function(e){ if (Number(e.given || 0) > 0 && e.date >= sinceIso) recent[(e.searchable || "").toLowerCase()] = true; });
+  var recent = {}, everDelivered = {};
+  entries.forEach(function(e){
+    if (!(Number(e.given || 0) > 0)) return;
+    var k = (e.searchable || "").toLowerCase();
+    everDelivered[k] = true;
+    if (e.date >= sinceIso) recent[k] = true;
+  });
+  // On the route: delivered in the last 30 days, or a new customer with no deliveries yet.
   var list = customers.filter(function(c){
-    return recent[(c.searchable || "").toLowerCase()] && !c.hide_from_route && c.status !== "Left";
+    var k = (c.searchable || "").toLowerCase();
+    if (c.hide_from_route || c.status === "Left" || c.status === "Non-Active") return false;
+    return recent[k] || !everDelivered[k];
   }).map(function(c){ var pa = parseAddress(c.address); return { c: c, pa: pa }; });
   var vnum = function(v){ return parseInt(v, 10) || 0; };
   var p31 = list.filter(function(x){ return x.pa.area === "P31"; }).sort(function(a, b){ return vnum(a.pa.villa) - vnum(b.pa.villa); });
@@ -2540,23 +2548,23 @@ async function printRoutePDF() {
       header(title, rows.length, color);
       var body = rows.map(function(x, i){
         var p = x.pa;
-        return [i + 1, pdfText(x.c.customer_name), x.c.bottle_status || "Normal", "", p.villa, p.num ? p.type + " " + p.num : "-", "", "", "", ""];
+        return [i + 1, pdfText(x.c.customer_name), x.c.bottle_status || "Normal", "", p.villa, p.num ? p.type + " " + p.num : "-", pdfText(x.c.contact || ""), "", "", "", ""];
       });
-      for (var k = 0; k < blanks; k++) body.push([rows.length + k + 1, "", "", "", "", "", "", "", "", ""]);
+      for (var k = 0; k < blanks; k++) body.push([rows.length + k + 1, "", "", "", "", "", "", "", "", "", ""]);
       var avail = H - 24 - 10 - 9 - 6 - (withSummary ? 27 : 0);            // space for rows
       var rowH = Math.max(4.2, Math.min(6.5, avail / (body.length + 1)));
       doc.autoTable({
         startY: 24.5, margin: { left: 8, right: 8, bottom: 11 },
-        head: [["Sr.#", "Customer Name", "Bottle Status", "Delivery Priority", "Villa #", "Street / Road", "Bottles Delivered", "Bottles Received", "Cash Received (Rs)", "Remarks"]],
+        head: [["Sr.#", "Customer Name", "Bottle Status", "Delivery Priority", "Villa #", "Street / Road", "Contact #", "Bottles Delivered", "Bottles Received", "Cash Received (Rs)", "Remarks"]],
         body: body,
-        foot: [["", "Total " + title, "", "", "", "", "", "", "", ""]],
+        foot: [["", "Total " + title, "", "", "", "", "", "", "", "", ""]],
         theme: "grid",
         styles: { fontSize: 8, cellPadding: { top: 0.6, bottom: 0.6, left: 1.2, right: 1.2 }, minCellHeight: rowH, valign: "middle", halign: "center", lineColor: [185, 191, 214], lineWidth: 0.2, textColor: [15, 23, 42] },
         headStyles: { fillColor: color, textColor: 255, fontStyle: "bold", fontSize: 7.6, minCellHeight: 8 },
         footStyles: { fillColor: [253, 236, 220], textColor: NAVY, fontStyle: "bold" },
-        columnStyles: { 0: { cellWidth: 11 }, 1: { cellWidth: 50, halign: "left", fontStyle: "bold" }, 2: { cellWidth: 21 },
-          3: { cellWidth: 28, fillColor: [255, 248, 239] }, 4: { cellWidth: 15, fontStyle: "bold", textColor: NAVY }, 5: { cellWidth: 21 },
-          6: { cellWidth: 21 }, 7: { cellWidth: 21 }, 8: { cellWidth: 25 }, 9: { cellWidth: "auto" } },
+        columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: 46, halign: "left", fontStyle: "bold" }, 2: { cellWidth: 20 },
+          3: { cellWidth: 26, fillColor: [255, 248, 239] }, 4: { cellWidth: 14, fontStyle: "bold", textColor: NAVY }, 5: { cellWidth: 19 },
+          6: { cellWidth: 25 }, 7: { cellWidth: 20 }, 8: { cellWidth: 20 }, 9: { cellWidth: 24 }, 10: { cellWidth: "auto" } },
         alternateRowStyles: { fillColor: [246, 247, 252] },
         didParseCell: function(d){ if (d.section === "foot" && d.column.index === 1) d.cell.styles.halign = "left"; },
         didDrawPage: function(){ footer(); }
