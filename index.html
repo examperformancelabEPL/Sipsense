@@ -1319,7 +1319,7 @@ function formatAddress(area, villa, type, num) {
   villa = String(villa || "").trim().replace(/^villa\s*/i, "").toUpperCase();
   num = String(num || "").trim().toUpperCase();
   if (!villa) return "";
-  if (area === "P31") return "Villa " + villa + " - P31";
+  if (area === "P31") return "Villa " + villa + (num ? " - " + (type || "St.") + " " + num : "") + " - P31";
   return "Villa " + villa + (num ? " - " + (type || "St.") + " " + num : "") + " - Sports City";
 }
 function normalizeAddress(addr) {
@@ -1345,11 +1345,11 @@ function buildKeywords(c) {
 }
 function updatePopupAddress() {
   var area = document.getElementById("popupArea").value;
-  document.getElementById("popupStreetWrap").style.display = area === "Sports City" ? "block" : "none";
+  document.getElementById("popupStreetWrap").style.display = "block";
   document.getElementById("popupAddress").value = formatAddress(area,
     document.getElementById("popupVilla").value,
     document.getElementById("popupStreetType").value,
-    area === "Sports City" ? document.getElementById("popupStreetNo").value : "");
+    document.getElementById("popupStreetNo").value);
   document.getElementById("popupSearchable").value = standardSearchable({
     customer_name: document.getElementById("popupCustomerName").value,
     address: document.getElementById("popupAddress").value, searchable: "" }) || "";
@@ -1368,8 +1368,33 @@ function relinkEntries(oldC, newC) {
 }
 // Runs once after loading: tidies addresses into the standard format and re-attaches
 // entries that lost their customer after the customer's details were edited.
+// Street / road for P31 villas, read from the Precinct 31 (Bahria Homes) map. Applied once to
+// P31 customers that don't have a street or road yet; their past entries move with them.
+var P31_STREETS = {
+  "11":"Rd 2","109":"St. 1","116":"St. 1","130":"St. 1","137":"St. 1","138":"St. 1","201":"Rd 4","207":"Rd 4",
+  "369":"Rd 5","478":"Rd 6","496":"Rd 6","560":"Rd 6","576":"St. 8","578":"St. 8","594":"St. 8","627":"St. 8",
+  "643":"St. 8","699":"Rd 10","806":"St. 16","817":"St. 15","961":"St. 10","965":"St. 10","989":"St. 11",
+  "999":"St. 12","1002":"St. 12","1008":"St. 13","1031":"St. 13","1088":"St. 14"
+};
+function applyP31Streets() {
+  var n = 0;
+  customers.forEach(function(c){
+    var pa = parseAddress(c.address);
+    if (pa.area !== "P31" || pa.num) return;
+    var villa = pa.villa === "952/965" ? "965" : pa.villa;     // 952/965 is shown as 965
+    var sr = P31_STREETS[villa]; if (!sr) return;
+    var old = { searchable: c.searchable, display: c.display };
+    c.address = "Villa " + villa + " - " + sr + " - P31"; c.area = "P31";
+    c.display = c.customer_name + " – " + c.address;
+    c.keywords = buildKeywords(c);
+    relinkEntries(old, c);
+    n++;
+  });
+  return n;
+}
 function repairDataOnLoad() {
   var changed = 0;
+  changed += applyP31Streets();
   customers.forEach(function(c){
     var na = normalizeAddress(c.address), ns = normalizeStreetText(c.searchable), ar = parseAddress(na).area;
     if (na !== c.address || ns !== c.searchable || (ar && c.area !== ar)) {
@@ -1493,7 +1518,7 @@ function savePopupCustomer() {
   var villa = document.getElementById("popupVilla").value.trim().replace(/^villa\s*/i, "");
   var area = document.getElementById("popupArea").value;
   if (!villa) { alert("Please enter the Villa #."); return; }
-  if (area === "Sports City" && !document.getElementById("popupStreetNo").value.trim()) {
+  if (!document.getElementById("popupStreetNo").value.trim()) {
     if (!confirm("No Street / Road # entered. Save without it?")) return;
   }
   updatePopupAddress();
