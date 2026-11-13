@@ -436,6 +436,7 @@ Example: 318|2|0|2|
         <div class="small" style="margin-bottom:12px;">Auto-calculated from each customer's last delivery date + their assigned schedule. "On Call" customers never appear here.</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">
           <button class="btn secondary" id="refreshDeliveryBtn">Refresh</button>
+          <button class="btn primary" id="printRouteBtn">&#128424; Print Route</button>
           <select id="deliveryFilter" onchange="renderDeliverySchedule()" style="padding:10px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:13px;">
             <option value="all">All Schedules</option>
             <option value="Alternate Days">🔁 Alternate Days</option>
@@ -469,6 +470,7 @@ Example: 318|2|0|2|
         <div class="btnrow">
           <button class="btn primary" id="addCustomerBtn">Add New Customer</button>
           <button class="btn ghost" id="editCustomerBtn">Update Existing Customer</button>
+          <button class="btn primary" id="printRouteBtn2">&#128424; Print Route</button>
         </div>
         <div class="small" style="margin-top:10px;">Add / update is available here.</div>
       </div>
@@ -656,6 +658,19 @@ Example: 318|2|0|2|
         </select>
       </div>
     </div>
+    <div class="grid-2">
+      <div class="field"><label>Bottle Status</label>
+        <select id="popupBottleStatus">
+          <option value="Normal">Normal</option>
+          <option value="Clean">Clean</option>
+          <option value="Very Clean">Very Clean</option>
+          <option value="Refill">Refill</option>
+        </select>
+      </div>
+      <div class="field"><label>Route Sheet</label>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:600;padding:12px 0;"><input type="checkbox" id="popupOnRoute" style="width:20px;height:20px;" checked> Show on route sheet</label>
+      </div>
+    </div>
     <div class="btnrow">
       <button class="btn primary" id="popupSaveBtn">Save</button>
       <button class="btn ghost" id="popupCancelBtn">Cancel</button>
@@ -802,7 +817,14 @@ function bindTabs() {
     });
   });
 }
+function streetSearchKey(q) {
+  // "st 8", "St. 8", "street 8", "rd 6", "road 6" -> {type, num}
+  var m = String(q || "").trim().match(/^(st|street|rd|road)\.?\s*#?\s*([0-9]+[a-z]?)$/i);
+  return m ? { type: /^r/i.test(m[1]) ? "Rd" : "St.", num: m[2].toUpperCase() } : null;
+}
 function customerMatch(c, q) {
+  var sk = streetSearchKey(q);
+  if (sk) { var pa = parseAddress(c.address); return pa.type === sk.type && pa.num === sk.num; }
   return [c.searchable,c.customer_name,c.address,c.contact,c.payment_type,c.display,c.keywords].join(" ").toLowerCase().includes(q);
 }
 function villaSearchKey(q) {
@@ -891,6 +913,8 @@ function pickPopupCustomer(c) {
   document.getElementById("popupPrice").value = c.price_per_bottle;
   document.getElementById("popupDeliverySchedule").value = c.delivery_schedule || "Alternate Days";
   document.getElementById("popupStatus").value = c.status || "Active";
+  document.getElementById("popupBottleStatus").value = c.bottle_status || "Normal";
+  document.getElementById("popupOnRoute").checked = !c.hide_from_route;
   document.getElementById("popupSuggest").style.display = "none";
 }
 function handlePopupStatusChange(el) {
@@ -1341,7 +1365,7 @@ function standardSearchable(c) {
   return nm + " - Villa " + p.villa;
 }
 function buildKeywords(c) {
-  return [c.searchable, c.customer_name, c.address, c.contact, c.payment_type, c.area, c.nickname].filter(Boolean).join(" | ");
+  return [c.searchable, c.customer_name, c.address, c.contact, c.payment_type, c.area, c.nickname, c.bottle_status].filter(Boolean).join(" | ");
 }
 function updatePopupAddress() {
   var area = document.getElementById("popupArea").value;
@@ -1392,8 +1416,34 @@ function applyP31Streets() {
   });
   return n;
 }
+// Bottle status from the route sheet (13 Nov 2026). Only fills customers that have none yet.
+var BOTTLE_STATUS_SEED = {
+  "Mrs. Syeda Faiza":"Normal","Akbar Ali":"Normal","Villa 137 - P31":"Normal","Mrs. Huma Waseem":"Normal","Maj. Pasha":"Normal",
+  "Mr. Mir Ghazanfar":"Clean","Mr. Sulman":"Normal","Mr. Aqib":"Clean","Mr. Faheem Ali":"Very Clean","Mr. Fashat Ali":"Very Clean",
+  "Villa 576":"Very Clean","Mrs. Saira":"Very Clean","Villa 594":"Very Clean","Mr. Shahid":"Clean","Mr. Nabeel":"Normal",
+  "Waqar Ali":"Clean","Obaid Ali":"Clean","Mrs. Sonia":"Very Clean","Villa 961":"Normal","Villa 965":"Normal","Mukaram Bhai":"Normal",
+  "Mr. Shihab":"Normal","Mrs. Zeenat Waseem":"Normal","Mrs. Amna":"Refill","Mr. Tahir":"Normal","Villa 1088 - P31":"Normal",
+  "Syed Muhammed Ali":"Normal","Mr. Jasim":"Very Clean","A.R Hyder":"Normal","Mrs. Anum":"Normal","Mrs. Areeba Shah":"Clean",
+  "Mr. Irfan Ijaz":"Very Clean","Mr. Sadquain Sadqui":"Very Clean","Aamir Sb.":"Normal","Mrs. Maheen Yousef":"Clean","Abdullaha Khan":"Normal",
+  "Mr. Fawad":"Very Clean","Nauman Bhai":"Very Clean","Ms. Fabiha":"Normal","Mr. Jameel":"Normal","Zahid Bhai":"Clean","Mr. Ali Raza":"Normal",
+  "Mr. Waheed":"Very Clean","Mrs. Najma":"Normal","Mr. Asad Ghani":"Very Clean","Syed Muhamed Haider":"Normal","Zahra -":"Clean","Zahra":"Clean",
+  "Athar Zaidi":"Clean","Mr. Muneeb Hashmi":"Normal","Mrs. Maria":"Very Clean","Rashid Bhai - Site":"Normal","Sarfraz Bhai":"Very Clean","Mrs. Urooj":"Normal"
+};
+var ROUTE_HIDE_VILLAS = ["342", "497", "498"];   // taken off the P31 list (13 Nov 2026)
+function applyRouteSeed() {
+  var n = 0;
+  customers.forEach(function(c){
+    if (!c.bottle_status && BOTTLE_STATUS_SEED[c.customer_name]) { c.bottle_status = BOTTLE_STATUS_SEED[c.customer_name]; n++; }
+    if (c.route_seeded) return;
+    var pa = parseAddress(c.address);
+    if (pa.area === "P31" && ROUTE_HIDE_VILLAS.indexOf(pa.villa) > -1) c.hide_from_route = true;
+    c.route_seeded = true; c.keywords = buildKeywords(c); n++;
+  });
+  return n;
+}
 function repairDataOnLoad() {
   var changed = 0;
+  changed += applyRouteSeed();
   changed += applyP31Streets();
   customers.forEach(function(c){
     var na = normalizeAddress(c.address), ns = normalizeStreetText(c.searchable), ar = parseAddress(na).area;
@@ -1506,6 +1556,8 @@ function openPopup(mode) {
   ["popupFindCustomer","popupSearchable","popupCustomerName","popupContact","popupAddress","popupPrice","popupVilla","popupStreetNo"].forEach(id => document.getElementById(id).value = "");
   document.getElementById("popupArea").value = "P31";
   document.getElementById("popupStreetType").value = "St.";
+  document.getElementById("popupBottleStatus").value = "Normal";
+  document.getElementById("popupOnRoute").checked = true;
   updatePopupAddress();
   document.getElementById("popupPaymentType").value = "Cash";
   document.getElementById("popupDeliverySchedule").value = "Alternate Days";
@@ -1538,6 +1590,8 @@ function savePopupCustomer() {
     price_per_bottle: Number(document.getElementById("popupPrice").value || 140),
     delivery_schedule: document.getElementById("popupDeliverySchedule").value,
     status: document.getElementById("popupStatus").value,
+    bottle_status: document.getElementById("popupBottleStatus").value,
+    hide_from_route: !document.getElementById("popupOnRoute").checked,
     area: document.getElementById("popupArea").value
   };
   applyLeftCustomerDefaults(c);
@@ -1865,6 +1919,7 @@ window.addEventListener("load", async () => {
   bindSuggests();
   bindActions();
   try { bindKamran(); } catch (err) { console.error("Kamran payments setup failed", err); }
+  ["printRouteBtn", "printRouteBtn2"].forEach(function(id){ var b = document.getElementById(id); if (b) b.addEventListener("click", printRoutePDF); });
   document.getElementById("dayDate").value = todayISO();
   try { renderDayList(); } catch (err) { console.error(err); }
   document.getElementById("entryDate").value = todayISO();
@@ -2432,6 +2487,102 @@ function bindKamran() {
   document.getElementById("kamShowBtn").addEventListener("click", renderKamList);
   document.querySelector('.tab[data-tab="kamran"]').addEventListener("click", renderKamList);
   renderKamList();
+}
+// ===== PRINT ROUTE (A4 landscape: P31 page, Sports City page) =====
+function routeCustomers(days) {
+  var since = new Date(); since.setDate(since.getDate() - (days || 30));
+  var sinceIso = since.getFullYear() + "-" + String(since.getMonth() + 1).padStart(2, "0") + "-" + String(since.getDate()).padStart(2, "0");
+  var recent = {};
+  entries.forEach(function(e){ if (Number(e.given || 0) > 0 && e.date >= sinceIso) recent[(e.searchable || "").toLowerCase()] = true; });
+  var list = customers.filter(function(c){
+    return recent[(c.searchable || "").toLowerCase()] && !c.hide_from_route && c.status !== "Left";
+  }).map(function(c){ var pa = parseAddress(c.address); return { c: c, pa: pa }; });
+  var vnum = function(v){ return parseInt(v, 10) || 0; };
+  var p31 = list.filter(function(x){ return x.pa.area === "P31"; }).sort(function(a, b){ return vnum(a.pa.villa) - vnum(b.pa.villa); });
+  var sc = list.filter(function(x){ return x.pa.area !== "P31"; }).sort(function(a, b){
+    var ta = a.pa.type === "Rd" ? 1 : 0, tb = b.pa.type === "Rd" ? 1 : 0;
+    return (ta - tb) || (vnum(a.pa.num) - vnum(b.pa.num)) || String(a.pa.num).localeCompare(String(b.pa.num)) || (vnum(a.pa.villa) - vnum(b.pa.villa));
+  });
+  return { p31: p31, sc: sc };
+}
+async function printRoutePDF() {
+  var btns = [document.getElementById("printRouteBtn"), document.getElementById("printRouteBtn2")];
+  btns.forEach(function(b){ if (b) { b.disabled = true; b.dataset.old = b.innerHTML; b.textContent = "Preparing..."; } });
+  try {
+    await loadScriptOnce("/vendor/jspdf.umd.min.js");
+    await loadScriptOnce("/vendor/jspdf.plugin.autotable.min.js");
+    var logo = await loadImageDataUrl("/vendor/sipsense-logo.jpg");
+    var r = routeCustomers(30);
+    var doc = new window.jspdf.jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    var W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+    var NAVY = [45, 49, 146], ORANGE = [243, 130, 34], GREY = [102, 112, 133];
+    function header(title, count, color) {
+      if (logo) doc.addImage(logo, "JPEG", 8, 5, 26, 15);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor.apply(doc, NAVY);
+      doc.text("Delivery Route - " + title, 38, 12);
+      doc.setFontSize(9); doc.setTextColor.apply(doc, color === ORANGE ? [194, 86, 12] : NAVY);
+      doc.text(count + " active customers", 38, 17);
+      doc.setFontSize(10); doc.setTextColor.apply(doc, NAVY); doc.setDrawColor.apply(doc, NAVY); doc.setLineWidth(0.35);
+      var x = W - 8;
+      [["Rider", 32], ["Day", 24], ["Date", 36]].forEach(function(f){
+        doc.line(x - f[1], 15, x, 15); doc.text(f[0], x - f[1] - 2, 14.5, { align: "right" }); x -= f[1] + 14;
+      });
+      doc.setFillColor.apply(doc, color); doc.rect(8, 21, W - 16, 1.1, "F");
+      doc.setFillColor.apply(doc, color === ORANGE ? NAVY : ORANGE); doc.rect(8, 22.1, W - 16, 0.6, "F");
+    }
+    function footer() {
+      doc.setFillColor.apply(doc, ORANGE); doc.rect(8, H - 9, W - 16, 0.4, "F");
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor.apply(doc, NAVY);
+      doc.text("SipSense - Purified Drinking Water", 8, H - 5);
+      doc.text("Priority: write Urgent / Today / Call first etc.", W - 8, H - 5, { align: "right" });
+    }
+    function areaPage(title, rows, color, blanks, withSummary) {
+      header(title, rows.length, color);
+      var body = rows.map(function(x, i){
+        var p = x.pa;
+        return [i + 1, pdfText(x.c.customer_name), x.c.bottle_status || "Normal", "", p.villa, p.num ? p.type + " " + p.num : "-", "", "", "", ""];
+      });
+      for (var k = 0; k < blanks; k++) body.push([rows.length + k + 1, "", "", "", "", "", "", "", "", ""]);
+      var avail = H - 24 - 10 - 9 - 6 - (withSummary ? 27 : 0);            // space for rows
+      var rowH = Math.max(4.2, Math.min(6.5, avail / (body.length + 1)));
+      doc.autoTable({
+        startY: 24.5, margin: { left: 8, right: 8, bottom: 11 },
+        head: [["Sr.#", "Customer Name", "Bottle Status", "Delivery Priority", "Villa #", "Street / Road", "Bottles Delivered", "Bottles Received", "Cash Received (Rs)", "Remarks"]],
+        body: body,
+        foot: [["", "Total " + title, "", "", "", "", "", "", "", ""]],
+        theme: "grid",
+        styles: { fontSize: 8, cellPadding: { top: 0.6, bottom: 0.6, left: 1.2, right: 1.2 }, minCellHeight: rowH, valign: "middle", halign: "center", lineColor: [185, 191, 214], lineWidth: 0.2, textColor: [15, 23, 42] },
+        headStyles: { fillColor: color, textColor: 255, fontStyle: "bold", fontSize: 7.6, minCellHeight: 8 },
+        footStyles: { fillColor: [253, 236, 220], textColor: NAVY, fontStyle: "bold" },
+        columnStyles: { 0: { cellWidth: 11 }, 1: { cellWidth: 50, halign: "left", fontStyle: "bold" }, 2: { cellWidth: 21 },
+          3: { cellWidth: 28, fillColor: [255, 248, 239] }, 4: { cellWidth: 15, fontStyle: "bold", textColor: NAVY }, 5: { cellWidth: 21 },
+          6: { cellWidth: 21 }, 7: { cellWidth: 21 }, 8: { cellWidth: 25 }, 9: { cellWidth: "auto" } },
+        alternateRowStyles: { fillColor: [246, 247, 252] },
+        didParseCell: function(d){ if (d.section === "foot" && d.column.index === 1) d.cell.styles.halign = "left"; },
+        didDrawPage: function(){ footer(); }
+      });
+      if (withSummary) {
+        var y = doc.lastAutoTable.finalY + 3;
+        if (y > H - 11 - 22) { doc.addPage(); footer(); y = 14; }
+        doc.autoTable({
+          startY: y, margin: { left: W - 8 - 175, right: 8, bottom: 11 }, tableWidth: 175,
+          head: [["Area", "Bottles Delivered", "Bottles Received", "Cash Received (Rs)", "Remarks"]],
+          body: [["P31", "", "", "", ""], ["Sports City", "", "", "", ""]], foot: [["Total", "", "", "", ""]],
+          theme: "grid", pageBreak: "avoid",
+          styles: { fontSize: 8, minCellHeight: 4.6, cellPadding: { top: 0.5, bottom: 0.5, left: 1.5, right: 1.5 }, lineColor: [185, 191, 214], lineWidth: 0.2, halign: "center", valign: "middle", textColor: NAVY },
+          headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", minCellHeight: 5 }, footStyles: { fillColor: [253, 236, 220], textColor: NAVY, fontStyle: "bold" },
+          columnStyles: { 0: { halign: "left", fontStyle: "bold", cellWidth: 30 } },
+          didParseCell: function(d){ if (d.column.index === 0) d.cell.styles.halign = "left"; }
+        });
+      }
+    }
+    areaPage("P31", r.p31, NAVY, 4, false);
+    doc.addPage();
+    areaPage("Sports City", r.sc, ORANGE, 3, true);
+    doc.save("SipSense_Delivery_Route_" + todayISO() + ".pdf");
+    showToast("Route sheet ready: " + r.p31.length + " P31 + " + r.sc.length + " Sports City");
+  } catch (err) { console.error(err); alert("Could not create the route sheet: " + err.message); }
+  finally { btns.forEach(function(b){ if (b) { b.disabled = false; b.innerHTML = b.dataset.old || "&#128424; Print Route"; } }); }
 }
 function computeMonthlyBill(key, from, to) {
   var kl = String(key || "").toLowerCase().trim();
