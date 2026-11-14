@@ -2546,47 +2546,57 @@ async function printRoutePDF() {
     }
     function areaPage(title, rows, color, blanks, withSummary) {
       header(title, rows.length, color);
+      var streetFirst = title !== "P31";          // Sports City: Street / Road before Villa #; P31: Villa # first
+      var LINE = [70, 76, 110];                   // darker grid lines
       var body = rows.map(function(x, i){
-        var p = x.pa;
-        return [i + 1, pdfText(x.c.customer_name), x.c.bottle_status || "Normal", pdfText(x.c.contact || ""), p.num ? p.type + " " + p.num : "-", p.villa, "", "", "", "", ""];
+        var p = x.pa, st = p.num ? p.type + " " + p.num : "-";
+        return [i + 1, pdfText(x.c.customer_name), x.c.bottle_status || "Normal", pdfText(x.c.contact || ""),
+                streetFirst ? st : p.villa, streetFirst ? p.villa : st, "", "", "", "", ""];
       });
       for (var k = 0; k < blanks; k++) body.push([rows.length + k + 1, "", "", "", "", "", "", "", "", "", ""]);
-      var avail = H - 24 - 10 - 9 - 6 - (withSummary ? 27 : 0);            // space for rows
-      var rowH = Math.max(4.2, Math.min(6.5, avail / (body.length + 1)));
+      // Row height: share the page between the rows (start 24.5, bottom 11, head 8.5, total row 6, summary 24)
+      var avail = H - 24.5 - 11 - 8.5 - 6 - (withSummary ? 24 : 0);
+      var rowH = Math.max(4.4, Math.min(8, avail / Math.max(1, body.length)));
+      var villaCol = streetFirst ? 5 : 4, streetCol = streetFirst ? 4 : 5;
+      var cs = { 0: { cellWidth: 10 }, 1: { cellWidth: 46, halign: "left", fontStyle: "bold" }, 2: { cellWidth: 20 },
+        3: { cellWidth: 25 }, 6: { cellWidth: 26, fillColor: [255, 248, 239] }, 7: { cellWidth: 20 }, 8: { cellWidth: 20 }, 9: { cellWidth: 24 }, 10: { cellWidth: "auto" } };
+      cs[villaCol] = { cellWidth: villaCol === 4 ? 16 : 16, fontStyle: "bold", textColor: NAVY };
+      cs[streetCol] = { cellWidth: 17 };
       doc.autoTable({
         startY: 24.5, margin: { left: 8, right: 8, bottom: 11 },
-        head: [["Sr.#", "Customer Name", "Bottle Status", "Contact #", "Street / Road", "Villa #", "Delivery Priority", "Bottles Delivered", "Bottles Received", "Cash Received (Rs)", "Remarks"]],
+        head: [["Sr.#", "Customer Name", "Bottle Status", "Contact #", streetFirst ? "Street / Road" : "Villa #", streetFirst ? "Villa #" : "Street / Road",
+                "Delivery Priority", "Bottles Delivered", "Bottles Received", "Cash Received (Rs)", "Remarks"]],
         body: body,
         foot: [["", "Total " + title, "", "", "", "", "", "", "", "", ""]],
         theme: "grid",
-        styles: { fontSize: 8, cellPadding: { top: 0.6, bottom: 0.6, left: 1.2, right: 1.2 }, minCellHeight: rowH, valign: "middle", halign: "center", lineColor: [185, 191, 214], lineWidth: 0.2, textColor: [15, 23, 42] },
-        headStyles: { fillColor: color, textColor: 255, fontStyle: "bold", fontSize: 7.6, minCellHeight: 8 },
-        footStyles: { fillColor: [253, 236, 220], textColor: NAVY, fontStyle: "bold" },
-        columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: 46, halign: "left", fontStyle: "bold" }, 2: { cellWidth: 20 },
-          3: { cellWidth: 25 }, 4: { cellWidth: 19 }, 5: { cellWidth: 14, fontStyle: "bold", textColor: NAVY },
-          6: { cellWidth: 26, fillColor: [255, 248, 239] }, 7: { cellWidth: 20 }, 8: { cellWidth: 20 }, 9: { cellWidth: 24 }, 10: { cellWidth: "auto" } },
-        alternateRowStyles: { fillColor: [246, 247, 252] },
+        styles: { fontSize: 8.4, cellPadding: { top: 0.3, bottom: 0.3, left: 1.4, right: 1.4 }, minCellHeight: rowH, valign: "middle", halign: "center",
+                  lineColor: LINE, lineWidth: 0.3, textColor: [15, 23, 42] },
+        headStyles: { fillColor: color, textColor: 255, fontStyle: "bold", fontSize: 7.8, minCellHeight: 8.5, lineColor: LINE, lineWidth: 0.3 },
+        footStyles: { fillColor: [253, 236, 220], textColor: NAVY, fontStyle: "bold", minCellHeight: 6, lineColor: LINE, lineWidth: 0.3 },
+        columnStyles: cs,
+        alternateRowStyles: { fillColor: [244, 245, 251] },
         didParseCell: function(d){ if (d.section === "foot" && d.column.index === 1) d.cell.styles.halign = "left"; },
         didDrawPage: function(){ footer(); }
       });
       if (withSummary) {
         var y = doc.lastAutoTable.finalY + 3;
-        if (y > H - 11 - 22) { doc.addPage(); footer(); y = 14; }
+        if (y > H - 11 - 20.5) { doc.addPage(); footer(); y = 14; }
         doc.autoTable({
           startY: y, margin: { left: W - 8 - 175, right: 8, bottom: 11 }, tableWidth: 175,
           head: [["Area", "Bottles Delivered", "Bottles Received", "Cash Received (Rs)", "Remarks"]],
           body: [["P31", "", "", "", ""], ["Sports City", "", "", "", ""]], foot: [["Total", "", "", "", ""]],
           theme: "grid", pageBreak: "avoid",
-          styles: { fontSize: 8, minCellHeight: 4.6, cellPadding: { top: 0.5, bottom: 0.5, left: 1.5, right: 1.5 }, lineColor: [185, 191, 214], lineWidth: 0.2, halign: "center", valign: "middle", textColor: NAVY },
-          headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", minCellHeight: 5 }, footStyles: { fillColor: [253, 236, 220], textColor: NAVY, fontStyle: "bold" },
+          styles: { fontSize: 8, minCellHeight: 5, cellPadding: { top: 0.5, bottom: 0.5, left: 1.5, right: 1.5 }, lineColor: LINE, lineWidth: 0.3, halign: "center", valign: "middle", textColor: NAVY },
+          headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", minCellHeight: 5, lineColor: LINE, lineWidth: 0.3 },
+          footStyles: { fillColor: [253, 236, 220], textColor: NAVY, fontStyle: "bold", lineColor: LINE, lineWidth: 0.3 },
           columnStyles: { 0: { halign: "left", fontStyle: "bold", cellWidth: 30 } },
           didParseCell: function(d){ if (d.column.index === 0) d.cell.styles.halign = "left"; }
         });
       }
     }
-    areaPage("P31", r.p31, NAVY, 4, false);
+    areaPage("P31", r.p31, NAVY, 0, false);
     doc.addPage();
-    areaPage("Sports City", r.sc, ORANGE, 3, true);
+    areaPage("Sports City", r.sc, ORANGE, 0, true);
     doc.save("SipSense_Delivery_Route_" + todayISO() + ".pdf");
     showToast("Route sheet ready: " + r.p31.length + " P31 + " + r.sc.length + " Sports City");
   } catch (err) { console.error(err); alert("Could not create the route sheet: " + err.message); }
