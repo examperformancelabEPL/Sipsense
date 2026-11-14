@@ -2555,7 +2555,7 @@ async function printRoutePDF() {
       });
       for (var k = 0; k < blanks; k++) body.push([rows.length + k + 1, "", "", "", "", "", "", "", "", "", ""]);
       // Row height: share the page between the rows (start 24.5, bottom 11, head 8.5, total row 6, summary 24)
-      var avail = H - 24.5 - 11 - 8.5 - 6 - (withSummary ? 24 : 0);
+      var avail = H - 24.5 - 11 - 8.5 - 6 - 2 - (withSummary ? 24 : 0);   // 2 mm safety so the total row stays on the page
       var rowH = Math.max(4.4, Math.min(8, avail / Math.max(1, body.length)));
       var villaCol = streetFirst ? 5 : 4, streetCol = streetFirst ? 4 : 5;
       var cs = { 0: { cellWidth: 10 }, 1: { cellWidth: 46, halign: "left", fontStyle: "bold" }, 2: { cellWidth: 20 },
@@ -2596,7 +2596,7 @@ async function printRoutePDF() {
     }
     areaPage("P31", r.p31, NAVY, 0, false);
     doc.addPage();
-    areaPage("Sports City", r.sc, ORANGE, 0, true);
+    areaPage("Sports City", r.sc, ORANGE, 0, false);
     doc.save("SipSense_Delivery_Route_" + todayISO() + ".pdf");
     showToast("Route sheet ready: " + r.p31.length + " P31 + " + r.sc.length + " Sports City");
   } catch (err) { console.error(err); alert("Could not create the route sheet: " + err.message); }
